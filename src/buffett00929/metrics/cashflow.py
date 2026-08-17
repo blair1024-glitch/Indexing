@@ -65,6 +65,37 @@ def fcf_to_net_income_average(company: Company, years: int = 5) -> DataPoint:
     return safe_mean(ratios, note="部分年度 FCF／淨利無法計算")
 
 
+def ocf_to_net_income_average(company: Company, years: int = 5) -> DataPoint:
+    """營業現金流／稅後淨利——真正的盈餘品質指標。
+
+    這和 ``fcf_to_net_income_average`` 衡量的是不同的事，不可混用：
+    營業現金流低於淨利，代表帳上獲利收不回現金（應收暴增、存貨堆積、
+    認列過於寬鬆），屬於**盈餘品質**問題；
+    而自由現金流低只是因為資本支出大，那是**資本密集**，不是品質問題。
+    """
+    incomes = {s.period.year: s for s in company.annual_incomes()}
+    flows = company.annual_cash_flows()[-years:]
+    if not flows:
+        return DataPoint.missing("無現金流量表，無法計算營業現金流／淨利")
+
+    ratios: list[DataPoint] = []
+    for flow in flows:
+        income = incomes.get(flow.period.year)
+        if income is None:
+            ratios.append(DataPoint.missing(f"{flow.period.year} 年缺淨利"))
+            continue
+        net_income = income.net_income
+        if net_income.is_available and net_income.value is not None and net_income.value <= 0:
+            ratios.append(
+                DataPoint.missing(f"{flow.period.year} 年淨利 ≤ 0，營業現金流／淨利無意義")
+            )
+            continue
+        ratios.append(
+            safe_div(flow.operating_cash_flow, net_income, note="缺營業現金流或淨利")
+        )
+    return safe_mean(ratios, note="部分年度營業現金流／淨利無法計算")
+
+
 def reinvestment_rate_average(company: Company, years: int = 5) -> DataPoint:
     """盈再率＝資本支出／營業現金流（近 N 年平均）。
 
@@ -86,7 +117,7 @@ def reinvestment_rate_average(company: Company, years: int = 5) -> DataPoint:
 
 
 def latest_fcf(company: Company) -> DataPoint:
-    flow = company.latest_cash_flow
+    flow = company.latest_annual_cash_flow
     if flow is None:
         return DataPoint.missing("無現金流量表，無法取得自由現金流")
     return flow.free_cash_flow
@@ -102,7 +133,9 @@ def capital_efficiency(
     """依規格第六節分類資本效率。回傳 (分類, 依據說明)。"""
     fcf_margin = fcf_margin_average(company)
     reinvestment = reinvestment_rate_average(company)
-    conversion = fcf_to_net_income_average(company)
+    # 盈餘品質看的是**營業**現金流：自由現金流低可能只是資本支出大，
+    # 那是資本密集，不是獲利收不回現金。
+    conversion = ocf_to_net_income_average(company)
 
     if not fcf_margin.is_available and not conversion.is_available:
         return EFFICIENCY_UNKNOWN, "缺現金流量表或損益表，無法評估資本效率"
@@ -111,7 +144,7 @@ def capital_efficiency(
     if conversion.is_available and conversion.value is not None and conversion.value < weak_conversion:
         return (
             EFFICIENCY_QUALITY_WARNING,
-            f"FCF／淨利僅 {conversion.value:.0%}，帳面獲利未有效轉化為現金",
+            f"營業現金流僅為淨利的 {conversion.value:.0%}，帳面獲利未有效轉化為現金",
         )
 
     if (
@@ -147,6 +180,7 @@ __all__ = [
     "fcf_margin_average",
     "fcf_series",
     "fcf_to_net_income_average",
+    "ocf_to_net_income_average",
     "latest_fcf",
     "reinvestment_rate_average",
 ]

@@ -112,7 +112,7 @@ def roe_trend(company: Company, window: int = 3) -> DataPoint:
 
 def latest_equity_multiplier(company: Company) -> DataPoint:
     """最新權益乘數。用來辨識高 ROE 是否靠槓桿堆出來的。"""
-    balance = company.latest_balance
+    balance = company.latest_annual_balance
     if balance is None:
         return DataPoint.missing("無資產負債表，無法計算權益乘數")
     return balance.equity_multiplier
@@ -120,8 +120,8 @@ def latest_equity_multiplier(company: Company) -> DataPoint:
 
 def dupont(company: Company) -> DuPont:
     """最新年度的杜邦拆解。"""
-    income = company.latest_income
-    balance = company.latest_balance
+    income = company.latest_annual_income
+    balance = company.latest_annual_balance
     if income is None or balance is None:
         missing = DataPoint.missing("缺損益表或資產負債表，無法進行杜邦拆解")
         return DuPont(missing, missing, missing, missing)

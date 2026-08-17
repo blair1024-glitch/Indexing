@@ -98,7 +98,7 @@ class Valuation:
 
 def share_count(company: Company, par_value: float = DEFAULT_PAR_VALUE) -> DataPoint:
     """由普通股股本換算流通股數：股數 = 股本 ÷ 面額。"""
-    balance = company.latest_balance
+    balance = company.latest_annual_balance
     if balance is None or not balance.shares_outstanding.is_available:
         return DataPoint.missing("缺普通股股本，無法換算流通股數")
     capital = balance.shares_outstanding

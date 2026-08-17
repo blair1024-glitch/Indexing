@@ -9,40 +9,36 @@ from __future__ import annotations
 from ..models import Company, DataPoint, safe_div
 
 
-def _latest(company: Company) -> DataPoint | None:
-    return None
-
-
 def debt_ratio(company: Company) -> DataPoint:
-    balance = company.latest_balance
+    balance = company.latest_annual_balance
     if balance is None:
         return DataPoint.missing("無資產負債表，無法計算負債比")
     return balance.debt_ratio
 
 
 def debt_to_equity(company: Company) -> DataPoint:
-    balance = company.latest_balance
+    balance = company.latest_annual_balance
     if balance is None:
         return DataPoint.missing("無資產負債表，無法計算負債權益比")
     return balance.debt_to_equity
 
 
 def current_ratio(company: Company) -> DataPoint:
-    balance = company.latest_balance
+    balance = company.latest_annual_balance
     if balance is None:
         return DataPoint.missing("無資產負債表，無法計算流動比率")
     return balance.current_ratio
 
 
 def net_debt(company: Company) -> DataPoint:
-    balance = company.latest_balance
+    balance = company.latest_annual_balance
     if balance is None:
         return DataPoint.missing("無資產負債表，無法計算淨負債")
     return balance.net_debt
 
 
 def interest_coverage(company: Company) -> DataPoint:
-    income = company.latest_income
+    income = company.latest_annual_income
     if income is None:
         return DataPoint.missing("無損益表，無法計算利息保障倍數")
     return income.interest_coverage
@@ -54,8 +50,8 @@ def debt_to_fcf(company: Company) -> DataPoint:
     FCF ≤ 0 時「幾年可還清」沒有意義，回傳缺料並說明；
     評分時該指標不計分，另由紅旗系統標記 FCF 為負的問題。
     """
-    balance = company.latest_balance
-    flow = company.latest_cash_flow
+    balance = company.latest_annual_balance
+    flow = company.latest_annual_cash_flow
     if balance is None or flow is None:
         return DataPoint.missing("缺資產負債表或現金流量表，無法計算負債／FCF")
 

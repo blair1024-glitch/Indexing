@@ -111,7 +111,7 @@ def loss_years(company: Company, years: int = 5) -> DataPoint:
 
 def latest_revenue_in_100m(company: Company) -> DataPoint:
     """最新年度營收，換算為「億元」——規模門檻用億元設定較直觀。"""
-    income = company.latest_income
+    income = company.latest_annual_income
     if income is None or not income.revenue.is_available:
         return DataPoint.missing("無最新年度營收，無法評估規模")
     return DataPoint.derived(income.revenue.value / 1e8, inputs=[income.revenue])  # type: ignore[operator]

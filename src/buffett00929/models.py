@@ -595,6 +595,23 @@ class Company:
     def trailing_annual_incomes(self, years: int) -> list[IncomeStatement]:
         return self.annual_incomes()[-years:]
 
+    # 年度指標一律用這組取數。``latest_income`` 取的是序列最後一筆，
+    # 若序列同時含季報就會拿到季度數字——年度 ROE 配上單季淨利會嚴重失真。
+    @property
+    def latest_annual_income(self) -> IncomeStatement | None:
+        annual = self.annual_incomes()
+        return annual[-1] if annual else None
+
+    @property
+    def latest_annual_balance(self) -> BalanceSheet | None:
+        annual = self.annual_balances()
+        return annual[-1] if annual else None
+
+    @property
+    def latest_annual_cash_flow(self) -> CashFlowStatement | None:
+        annual = self.annual_cash_flows()
+        return annual[-1] if annual else None
+
     def note_gap(self, message: str) -> None:
         if message not in self.data_gaps:
             self.data_gaps.append(message)
