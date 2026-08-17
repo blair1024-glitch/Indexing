@@ -368,11 +368,52 @@ class DataLoader:
         if self.mops.schema_watch.has_issues:
             # 只報數量等於沒報：讀者無從判斷是業別差異還是對應寫錯，
             # 而後者曾經真的發生過（全形括號害整批欄位對不上）。
-            # 因此列出欄位，並直接講出真正該講的那句話——有沒有影響到成分股。
-            fields = self.mops.schema_watch.unknown_fields
+            names = sorted(
+                {issue.split(":", 1)[-1].split("（", 1)[0].strip()
+                 for issue in self.mops.schema_watch.unknown_fields}
+            )
             self.warnings.append(
-                f"MOPS 彙總報表有 {len(fields)} 個欄位對不上："
-                + "；".join(fields)
+                f"MOPS 彙總報表有 {len(names)} 個欄位在部分業別版面上對不到："
+                + "、".join(names)
+                + "。彙總報表依業別分表，銀行業沒有營業成本、金融業不分流動與非流動，"
+                "屬版面差異；是否真的影響到成分股，見下一則。"
+            )
+
+
+    def _report_constituent_coverage(self, loaded: list[LoadedCompany]) -> None:
+        """回答「欄位對不上有沒有影響到成分股」——警告只講版面差異是不夠的。
+
+        判斷方式是直接看核心欄位在成分股身上到底有沒有值，
+        而不是從版面推論：推論會漏掉「這一檔剛好落在缺欄位的版面」那種情況。
+        """
+        if self.history is None:
+            return
+
+        affected: list[str] = []
+        for item in loaded:
+            company = item.company
+            income = company.latest_annual_income
+            balance = company.latest_annual_balance
+            missing = (
+                income is None
+                or balance is None
+                or not income.revenue.is_available
+                or not income.net_income.is_available
+                or not balance.total_assets.is_available
+                or not balance.total_equity.is_available
+            )
+            if missing:
+                affected.append(f"{company.stock_id} {company.name}")
+
+        if affected:
+            self.warnings.append(
+                f"其中 {len(affected)} 檔成分股的核心欄位（營收／稅後淨利／總資產／權益）"
+                f"確實缺漏：{'、'.join(affected)}"
+            )
+        else:
+            self.warnings.append(
+                "全部成分股的核心欄位（營收／稅後淨利／總資產／權益）皆完整，"
+                "上述欄位差異未影響本次分析"
             )
 
     def load_all(self, constituents: ConstituentSet) -> list[LoadedCompany]:
@@ -403,6 +444,8 @@ class DataLoader:
                         detection=CumulativeDetection(True, "low", "資料載入失敗，未進行偵測"),
                     )
                 )
+
+        self._report_constituent_coverage(loaded)
 
         if self.finmind.unmapped_types:
             for dataset, names in self.finmind.unmapped_types.items():

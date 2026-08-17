@@ -261,3 +261,52 @@ class TestCashBackfill:
         company = Company(stock_id="2330", name="台積電")
         loader._load_from_mops(company)
         assert company.balance_sheets[0].cash.value == pytest.approx(111.0)
+
+
+class TestConstituentCoverageReport:
+    """「12 個欄位對不上」本身不可行動——讀者要問的是：影響到成分股了嗎？
+
+    而且答案不能用版面推論，得直接看核心欄位在成分股身上有沒有值。
+    """
+
+    def _loaded(self, *, complete: bool):
+        from buffett00929.loader import LoadedCompany
+        from buffett00929.models import BalanceSheet, Company, IncomeStatement
+        from buffett00929.normalize import CumulativeDetection
+
+        company = Company(stock_id="5269", name="祥碩科技")
+        company.income_statements = [
+            IncomeStatement(
+                period=FY2020,
+                revenue=point(1000.0, "MOPS") if complete else DataPoint.missing("缺"),
+                net_income=point(100.0, "MOPS"),
+            )
+        ]
+        company.balance_sheets = [
+            BalanceSheet(
+                period=FY2020,
+                total_assets=point(3000.0, "MOPS"),
+                total_equity=point(2000.0, "MOPS"),
+            )
+        ]
+        return [LoadedCompany(company=company, detection=CumulativeDetection(True, "high", ""))]
+
+    def test_says_so_plainly_when_nothing_is_affected(self, loader):
+        from buffett00929.sources.mops import MopsHistory
+
+        loader.history = MopsHistory()
+        loader._report_constituent_coverage(self._loaded(complete=True))
+        assert any("未影響本次分析" in w for w in loader.warnings)
+
+    def test_names_the_affected_constituents(self, loader):
+        from buffett00929.sources.mops import MopsHistory
+
+        loader.history = MopsHistory()
+        loader._report_constituent_coverage(self._loaded(complete=False))
+        affected = [w for w in loader.warnings if "確實缺漏" in w]
+        assert affected and "5269" in affected[0]
+
+    def test_stays_quiet_when_mops_was_not_used(self, loader):
+        loader.history = None
+        loader._report_constituent_coverage(self._loaded(complete=False))
+        assert not loader.warnings
