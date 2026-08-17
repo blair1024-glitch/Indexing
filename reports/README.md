@@ -385,7 +385,8 @@ _以下項目未能取得資料。系統不會以推估值填補，相關指標�
   - 資產負債表 2026Q2 已以官方數字覆蓋 5 個欄位（官方優先）
 
 **執行警告**：
-- MOPS 彙總報表有 12 個欄位對不上：MOPS 彙總報表: 找不到欄位 revenue（候選：營業收入 / 淨收益 / 收益 / 收入）；MOPS 彙總報表: 找不到欄位 cost_of_revenue（候選：營業成本 / 支出及費用 / 支出）；MOPS 彙總報表: 找不到欄位 gross_profit（候選：營業毛利(毛損)淨額 / 營業毛利(毛損) / 營業毛利）；MOPS 彙總報表: 找不到欄位 operating_income（候選：營業利益(損失) / 營業利益 / 營業損益）；MOPS 彙總報表: 找不到欄位 non_operating_income（候選：營業外收入及支出 / 營業外損益）；MOPS 彙總報表: 找不到欄位 operating_expenses（候選：營業費用）；MOPS 彙總報表: 找不到欄位 current_assets（候選：流動資產）；MOPS 彙總報表: 找不到欄位 current_liabilities（候選：流動負債）；MOPS 彙總報表: 找不到欄位 total_assets（候選：資產總計 / 資產總額）；MOPS 彙總報表: 找不到欄位 total_liabilities（候選：負債總計 / 負債總額）；MOPS 彙總報表: 找不到欄位 total_equity（候選：權益總計 / 權益總額）；MOPS 彙總報表: 找不到欄位 cash（候選：現金及約當現金）
+- MOPS 彙總報表有 12 個欄位在部分業別版面上對不到：找不到欄位 cash、找不到欄位 cost_of_revenue、找不到欄位 current_assets、找不到欄位 current_liabilities、找不到欄位 gross_profit、找不到欄位 non_operating_income、找不到欄位 operating_expenses、找不到欄位 operating_income、找不到欄位 revenue、找不到欄位 total_assets、找不到欄位 total_equity、找不到欄位 total_liabilities。彙總報表依業別分表，銀行業沒有營業成本、金融業不分流動與非流動，屬版面差異；是否真的影響到成分股，見下一則。
+- 全部成分股的核心欄位（營收／稅後淨利／總資產／權益）皆完整，上述欄位差異未影響本次分析
 
 ## 資料來源
 
