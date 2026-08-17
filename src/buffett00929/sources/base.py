@@ -33,17 +33,30 @@ class SourceUnavailable(Exception):
 
 @dataclass
 class HttpClient:
-    """帶重試、退避與快取的 HTTP 客戶端。"""
+    """帶重試、退避、節流與快取的 HTTP 客戶端。"""
 
     timeout: float = 30.0
     max_retries: int = 3
     backoff: Sequence[float] = (2, 4, 8)
     user_agent: str = "buffett00929/0.1"
     cache: DiskCache | None = None
+    min_interval_seconds: float = 0.0
+    """兩次實際請求之間的最小間隔。回補十年歷史時必須節流，否則會被來源端擋。"""
     session: requests.Session = field(default_factory=requests.Session)
+    _last_request_at: float = field(default=0.0, init=False, repr=False)
 
     def __post_init__(self) -> None:
         self.session.headers.update({"User-Agent": self.user_agent})
+
+    def _throttle(self) -> None:
+        """命中快取不算一次請求——只有真的送出去才需要等。"""
+        if self.min_interval_seconds <= 0:
+            return
+        elapsed = time.monotonic() - self._last_request_at
+        remaining = self.min_interval_seconds - elapsed
+        if self._last_request_at and remaining > 0:
+            time.sleep(remaining)
+        self._last_request_at = time.monotonic()
 
     def get_json(
         self,
@@ -52,18 +65,75 @@ class HttpClient:
         headers: dict | None = None,
         *,
         use_cache: bool = True,
+        namespace: str | None = None,
+        immutable: bool = False,
     ) -> Any:
+        return self._request_json(
+            "GET",
+            url,
+            params=params,
+            headers=headers,
+            use_cache=use_cache,
+            namespace=namespace,
+            immutable=immutable,
+        )
+
+    def post_json(
+        self,
+        url: str,
+        body: dict | None = None,
+        headers: dict | None = None,
+        *,
+        use_cache: bool = True,
+        namespace: str | None = None,
+        immutable: bool = False,
+    ) -> Any:
+        """送出 JSON body 的 POST。
+
+        新版公開資訊觀測站是 SPA，查詢一律走 ``POST /mops/api/<code>`` 加 JSON body；
+        用 form-encoded 送會被拒。快取鍵沿用 body（等同 GET 的 params），
+        因為對這些端點而言 body 就是查詢條件。
+        """
+        return self._request_json(
+            "POST",
+            url,
+            params=body,
+            headers=headers,
+            use_cache=use_cache,
+            namespace=namespace,
+            immutable=immutable,
+        )
+
+    def _request_json(
+        self,
+        method: str,
+        url: str,
+        *,
+        params: dict | None,
+        headers: dict | None,
+        use_cache: bool,
+        namespace: str | None,
+        immutable: bool,
+    ) -> Any:
+        cache_key = {"_method": method, **(params or {})} if method != "GET" else params
+
         if use_cache and self.cache:
-            entry = self.cache.get(url, params)
+            entry = self.cache.get(url, cache_key, namespace=namespace, immutable=immutable)
             if entry is not None:
                 return entry.payload
 
         last_error: Exception | None = None
         for attempt in range(self.max_retries):
+            self._throttle()
             try:
-                response = self.session.get(
-                    url, params=params, headers=headers, timeout=self.timeout
-                )
+                if method == "GET":
+                    response = self.session.get(
+                        url, params=params, headers=headers, timeout=self.timeout
+                    )
+                else:
+                    response = self.session.post(
+                        url, json=params or {}, headers=headers, timeout=self.timeout
+                    )
             except requests.RequestException as exc:
                 last_error = exc
             else:
@@ -73,7 +143,9 @@ class HttpClient:
                     except ValueError as exc:
                         raise FetchError(f"{url} 回傳非 JSON 內容：{exc}") from exc
                     if self.cache:
-                        self.cache.set(url, params, payload)
+                        self.cache.set(
+                            url, cache_key, payload, namespace=namespace, immutable=immutable
+                        )
                     return payload
 
                 # 4xx（除 429）是請求本身的問題，重試沒有意義。

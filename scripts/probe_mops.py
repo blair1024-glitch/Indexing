@@ -3,38 +3,38 @@
 
 **一次性診斷工具，不是正式流程的一部分。**
 
-## 第一輪：舊系統已不存在
+## 前三輪的結論
 
-實測（2026-08-17）確認所有傳統端點都只回 65 bytes 的轉址殘骸::
+**第一輪：舊系統在新網域上已不存在。** ``mops.twse.com.tw`` 的所有傳統端點
+都只回 65 bytes 的轉址殘骸 ``<script> location.href = ... "/mops"; </script>``；
+``/server-java/*`` 一律 404。
 
-    <script> location.href = location.origin + "/mops"; </script>
+**第二輪：新版是 SPA。** 側錄首頁得知資料走 ``POST /mops/api/<group>/<code>``
+且 body 是 **JSON**（第一輪送 form-encoded 才會全軍覆沒）::
 
-`/mops/web/t163sb04`、`/mops/api/t163sb04`、`t57sb01_q1` 皆同；
-`/server-java/*`（含 FileDownLoad）一律 404——舊的 Java servlet 層已拆除。
-
-結論：**form POST 抓彙總報表的做法在 2026 年已死**，不能實作。
-
-## 第二輪：找到新版的 API 形狀，但沒拿到內容
-
-側錄首頁得知新版是 SPA，資料來自 ``POST /mops/api/<code>``，
-而且 body 是 **JSON**（不是 form-encoded，這正是第一輪失敗的原因）::
-
-    GET  /mops/api/system/maintenance   → {"maintenance": false}
     POST /mops/api/home_page/t146sb10   body {"count": 8, "marketKind": "sii"}
     POST /mops/api/home_page/t108sb31new  body {"yymm": "1158"}
 
-參數形狀也跟著露出來了：民國年月併成 ``1158``、市場別叫 ``marketKind``
-（``sii`` = 上市）。但財報端點一個都沒側錄到，因為只有首頁被載入，
-而且回應內容全部讀不到（探測程式在讀 body 前就跳去下一頁了）。
+注意路徑中間那段 ``home_page``——這是第三輪失敗的原因。
 
-## 第三輪（本輪）：直接從 SPA 的 JS bundle 挖出它的端點表
+**第三輪：從 bundle 挖出完整路由表，並發現舊網域還活著。**
+``/mops/assets/index.js`` 裡有 397 個報表代碼與它們的中文名稱，
+本專案要的三張表確認為::
 
-不再猜路由。SPA 的前端程式碼裡一定有完整的路由與 API 對照表——
-把 bundle 抓下來、用中文報表名稱與 ``api/`` 樣式反查，就能得到
-**財報端點的真實代碼與參數**，不必等它自己發請求。
+    t163sb04  綜合損益表      t163sb05  資產負債表      t163sb20  現金流量表
 
-這和先前找復華持股 API 是同一個思路，只是往下一層：
-與其側錄它打了什麼，不如直接讀它「打算打什麼」。
+同一輪也證實 ``mopsov.twse.com.tw/mops/web/t163sb04`` 仍回傳 45,714 bytes
+的真實 HTML（不是轉址殘骸）——**舊網域還在供應彙總報表**。
+而直接打 ``/mops/api/t163sb04`` 全部落空，因為少了中間的 group 區段。
+
+## 第四輪（本輪）：讀 chunk，拿到確切的端點與參數
+
+路由表顯示每個報表都是獨立的 lazy chunk（``import("./t163sb04.js")``），
+**發送請求的程式碼就在那個 chunk 裡**。把 chunk 抓下來讀，
+就能得到確切的 API 路徑與 payload 欄位名——不必再猜，也不必開瀏覽器。
+
+同時並行測試舊網域的 ``ajax_t163sb04`` 表單查詢：
+第三輪已證明舊網域會回真實內容，這是同樣值得一試的路徑。
 
 用法（須在網路可通的環境執行，例如 GitHub Actions）：
 
@@ -43,7 +43,6 @@
 
 from __future__ import annotations
 
-import json
 import re
 import sys
 from typing import Any
@@ -52,7 +51,15 @@ import requests
 
 BASE = "https://mops.twse.com.tw"
 LEGACY = "https://mopsov.twse.com.tw"
+ASSETS = f"{BASE}/mops/assets"
 TIMEOUT = 40
+
+# 本專案要的三張表，代碼由第三輪的路由表確認。
+TARGETS = {
+    "t163sb04": "綜合損益表",
+    "t163sb05": "資產負債表",
+    "t163sb20": "現金流量表",
+}
 
 HEADERS = {
     "User-Agent": (
@@ -65,14 +72,11 @@ HEADERS = {
     "Origin": BASE,
 }
 
-# 我們要的三張表。用中文名稱回頭找 bundle 裡的代碼，比猜代碼可靠得多。
-WANTED = ["綜合損益表", "資產負債表", "現金流量表", "彙總報表", "財務報表"]
-
 SESSION = requests.Session()
 SESSION.headers.update(HEADERS)
 
 
-def preview(text: str, limit: int = 400) -> str:
+def preview(text: Any, limit: int = 400) -> str:
     return " ".join(str(text).split())[:limit]
 
 
@@ -81,249 +85,211 @@ def rule(title: str) -> None:
 
 
 # ----------------------------------------------------------------------
-# 第一階段：把 SPA 的 JS bundle 抓下來
+# 階段 1：抓下報表 chunk，讀出它真正呼叫的端點
 # ----------------------------------------------------------------------
 
 
-def fetch_bundles() -> dict[str, str]:
-    """取得首頁引用的所有 JS，回傳 {url: 內容}。"""
-    rule("階段 1：抓取 SPA 的 JS bundle")
+def mine_chunks() -> tuple[set[str], set[str]]:
+    """回傳 (API 路徑, payload 欄位名候選)。"""
+    rule("階段 1：讀取報表 chunk，找出確切的 API 路徑與參數")
 
-    try:
-        page = SESSION.get(f"{BASE}/mops/", timeout=TIMEOUT)
-    except Exception as exc:  # noqa: BLE001
-        print(f"✗ 首頁抓取失敗：{type(exc).__name__}: {exc}")
-        return {}
+    api_paths: set[str] = set()
+    param_names: set[str] = set()
 
-    print(f"首頁 HTTP {page.status_code}，{len(page.text)} bytes")
-
-    scripts = re.findall(r'<script[^>]+src=["\']([^"\']+)["\']', page.text)
-    links = re.findall(r'<link[^>]+href=["\']([^"\']+\.js)["\']', page.text)
-    candidates = []
-    for src in scripts + links:
-        if src.startswith("http"):
-            url = src
-        elif src.startswith("/"):
-            url = BASE + src
-        else:
-            url = f"{BASE}/mops/{src.lstrip('./')}"
-        if url not in candidates:
-            candidates.append(url)
-
-    print(f"找到 {len(candidates)} 個 JS 檔：")
-    for url in candidates:
-        print(f"  · {url}")
-
-    bundles: dict[str, str] = {}
-    for url in candidates:
+    for code, label in TARGETS.items():
+        url = f"{ASSETS}/{code}.js"
+        print(f"\n── {code}（{label}）──\n{url}")
         try:
             response = SESSION.get(url, timeout=TIMEOUT)
         except Exception as exc:  # noqa: BLE001
-            print(f"  ✗ {url} → {type(exc).__name__}: {exc}")
+            print(f"  ✗ {type(exc).__name__}: {exc}")
             continue
-        if response.status_code == 200 and response.text:
-            bundles[url] = response.text
-            print(f"  ✓ {url.rsplit('/', 1)[-1]} → {len(response.text):,} bytes")
-        else:
-            print(f"  ✗ {url} → HTTP {response.status_code}")
 
-    return bundles
+        if response.status_code != 200:
+            print(f"  ✗ HTTP {response.status_code}")
+            continue
 
+        text = response.text
+        print(f"  ✓ {len(text):,} bytes")
 
-# ----------------------------------------------------------------------
-# 第二階段：從 bundle 裡挖端點與參數
-# ----------------------------------------------------------------------
+        found = set(re.findall(r'["\'`]([^"\'`]*api/[A-Za-z0-9_\-/]{3,80})', text))
+        found |= set(re.findall(r'["\'`](/[A-Za-z0-9_\-/]*t\d{2,3}s[a-z]\w*)["\'`]', text))
+        api_paths |= found
+        print(f"  API 字串：{sorted(found) if found else '（無）'}")
 
+        # 送出請求的那一段程式碼——payload 欄位名就在裡面。
+        for match in re.finditer(r"(post|get|request|fetch|axios)\s*[(<]", text):
+            start = max(0, match.start() - 400)
+            snippet = text[start : match.end() + 600]
+            if "api" in snippet or "t163" in snippet:
+                print(f"\n  ── 送出請求處 ──\n  …{preview(snippet, 900)}…")
 
-def mine_bundles(bundles: dict[str, str]) -> list[str]:
-    """列出 bundle 裡出現的 API 路徑與報表代碼，回傳候選財報代碼。"""
-    rule("階段 2：從 bundle 挖出 API 路徑與報表代碼")
+        # 表單欄位：民國年、季別、市場別的實際參數名。
+        for key in re.findall(r"\b(year|season|quarter|market\w*|type\w*|TYPEK|"
+                              r"companyId|dataType|date|yymm|isQuery|encode\w*)\b", text):
+            param_names.add(key)
 
-    if not bundles:
-        print("（沒有 bundle 可分析）")
-        return []
-
-    api_paths: set[str] = set()
-    codes: set[str] = set()
-    context_hits: list[str] = []
-
-    for url, text in bundles.items():
-        api_paths.update(re.findall(r'["\'`/]api/([A-Za-z0-9_\-/]{3,60})', text))
-        codes.update(re.findall(r"\bt\d{2,3}s[a-z]\w{0,12}\b", text))
-
-        # 中文報表名稱附近的程式碼——這裡通常就是「名稱 → 代碼」的對照。
-        for term in WANTED:
+        for term in ("民國", "季別", "年度", "市場別", "全部", "上市", "上櫃"):
             for match in re.finditer(re.escape(term), text):
-                start = max(0, match.start() - 260)
-                snippet = text[start : match.end() + 260]
-                context_hits.append(f"[{url.rsplit('/', 1)[-1]}] …{preview(snippet, 520)}…")
+                start = max(0, match.start() - 200)
+                print(f"  「{term}」附近：…{preview(text[start : match.end() + 260], 460)}…")
+                break  # 每個詞只看第一次出現
 
-    print(f"\n-- API 路徑（{len(api_paths)} 個）--")
+    print(f"\n-- 彙整：API 路徑 --")
     for path in sorted(api_paths):
-        print(f"  api/{path}")
-
-    print(f"\n-- 報表代碼（{len(codes)} 個）--")
-    for code in sorted(codes):
-        print(f"  {code}")
-
-    print(f"\n-- 中文報表名稱的上下文（去重後最多 40 段）--")
-    seen: set[str] = set()
-    shown = 0
-    for hit in context_hits:
-        key = hit[:120]
-        if key in seen:
-            continue
-        seen.add(key)
-        print(f"\n  {hit}")
-        shown += 1
-        if shown >= 40:
-            print("\n  （其餘省略）")
-            break
-    if not context_hits:
-        print("  （bundle 內找不到中文報表名稱——可能是語系檔另外載入）")
-
-    # 候選：所有看起來像報表代碼的東西，優先 t163 系列（歷來的財報彙總）。
-    ranked = sorted(codes, key=lambda c: (not c.startswith("t163"), c))
-    return ranked
+        print(f"  {path}")
+    print(f"\n-- 彙整：可能的參數名 --\n  {sorted(param_names)}")
+    return api_paths, param_names
 
 
 # ----------------------------------------------------------------------
-# 第三階段：直接打候選端點
+# 階段 2：打新版 API
 # ----------------------------------------------------------------------
 
-# 依第二輪側錄到的真實 body 推出的參數形狀。全部都要實測，不能假設。
 PAYLOADS: list[tuple[str, dict[str, Any]]] = [
-    ("空 body", {}),
-    ("市場別 + 民國年 + 季", {"marketKind": "sii", "year": "115", "season": "01"}),
-    ("市場別 + 民國年 + 季（數字）", {"marketKind": "sii", "year": 115, "season": 1}),
-    ("舊參數名 TYPEK", {"TYPEK": "sii", "year": "115", "season": "01"}),
-    ("含公司代號", {"marketKind": "sii", "year": "115", "season": "01", "companyId": "2330"}),
-    ("年月併寫", {"marketKind": "sii", "yymm": "1152"}),
+    ("市場別 + 民國年 + 季", {"marketKind": "sii", "year": "114", "season": "01"}),
+    ("市場別 + 民國年 + 季（無前導零）", {"marketKind": "sii", "year": "114", "season": "1"}),
+    ("加 isQuery", {"marketKind": "sii", "year": "114", "season": "01", "isQuery": "Y"}),
+    ("舊參數名 TYPEK", {"TYPEK": "sii", "year": "114", "season": "01"}),
 ]
 
 
-def try_endpoint(code: str, payloads: list[tuple[str, dict[str, Any]]]) -> bool:
-    """對單一代碼試打各種 body，印出實際回應。回傳是否拿到疑似資料。"""
-    got_data = False
-    for label, payload in payloads:
-        url = f"{BASE}/mops/api/{code}"
-        try:
-            response = SESSION.post(url, json=payload, timeout=TIMEOUT)
-        except Exception as exc:  # noqa: BLE001
-            print(f"    {label:<24} ✗ {type(exc).__name__}: {exc}")
-            continue
-
-        body = response.text or ""
-        note = ""
-        try:
-            parsed = response.json()
-        except ValueError:
-            parsed = None
-        else:
-            if isinstance(parsed, dict):
-                note = f" keys={list(parsed)[:8]}"
-                data = parsed.get("data") or parsed.get("result")
-                if data:
-                    got_data = True
-                    note += "  ★ 有 data"
-
-        print(
-            f"    {label:<24} HTTP {response.status_code} "
-            f"{len(body):>7,}B{note}\n"
-            f"      {preview(body, 300)}"
-        )
-
-        if got_data:
-            print(f"\n      ── 完整回應（前 2500 字）──\n      {preview(body, 2500)}\n")
-            return True
-    return got_data
-
-
-def probe_codes(codes: list[str]) -> list[str]:
-    rule("階段 3：直接呼叫候選端點（JSON body）")
-
-    # 先確認基礎連線與已知端點仍然可用，作為對照組。
+def call(url: str, payload: dict[str, Any], label: str) -> bool:
     try:
-        health = SESSION.get(f"{BASE}/mops/api/system/maintenance", timeout=TIMEOUT)
-        print(f"對照組 maintenance：HTTP {health.status_code} {preview(health.text, 120)}")
+        response = SESSION.post(url, json=payload, timeout=TIMEOUT)
     except Exception as exc:  # noqa: BLE001
-        print(f"對照組 maintenance 失敗：{type(exc).__name__}: {exc}")
+        print(f"    {label:<28} ✗ {type(exc).__name__}: {exc}")
+        return False
 
+    body = response.text or ""
+    note = ""
+    hit = False
     try:
-        known = SESSION.post(
-            f"{BASE}/mops/api/home_page/t51sb10",
-            json={"count": 3, "marketKind": "sii"},
-            timeout=TIMEOUT,
-        )
-        print(
-            f"對照組 home_page/t51sb10：HTTP {known.status_code} "
-            f"{preview(known.text, 300)}"
-        )
-    except Exception as exc:  # noqa: BLE001
-        print(f"對照組 home_page/t51sb10 失敗：{type(exc).__name__}: {exc}")
+        parsed = response.json()
+    except ValueError:
+        pass
+    else:
+        if isinstance(parsed, dict):
+            note = f" keys={list(parsed)[:8]}"
+            payload_data = parsed.get("data") or parsed.get("result")
+            if payload_data:
+                hit = True
+                note += "  ★ 有 data"
 
-    if not codes:
-        print("\n（bundle 沒挖到代碼，改試歷來已知的財報彙總代碼）")
-        codes = ["t163sb04", "t163sb05", "t163sb06", "t163sb01", "t163sb02", "t163sb03"]
+    print(f"    {label:<28} HTTP {response.status_code} {len(body):>8,}B{note}")
+    print(f"      {preview(body, 260)}")
+    if hit:
+        print(f"\n      ── 完整回應（前 3000 字）──\n      {preview(body, 3000)}\n")
+    return hit
 
+
+def probe_new_api(discovered: set[str]) -> list[str]:
+    rule("階段 2：呼叫新版 API")
+
+    # 第二輪確認 group 區段存在（home_page）。財報頁的 group 未知，
+    # 所以把 chunk 挖到的路徑排最前面，其餘為推測。
+    candidates: list[str] = []
+    for path in sorted(discovered):
+        cleaned = path.lstrip("/")
+        for code in TARGETS:
+            if code in cleaned:
+                candidates.append(f"{BASE}/{cleaned.lstrip('/')}")
+    for code in TARGETS:
+        for group in ("", "t163/", "quer_summary/", "query/", "summary/", "web/"):
+            candidates.append(f"{BASE}/mops/api/{group}{code}")
+
+    seen: set[str] = set()
     hits: list[str] = []
-    for code in codes[:24]:
-        print(f"\n  ── {code} ──")
-        if try_endpoint(code, PAYLOADS):
-            hits.append(code)
-    if len(codes) > 24:
-        print(f"\n（代碼共 {len(codes)} 個，本輪只試前 24 個）")
+    for url in candidates:
+        if url in seen:
+            continue
+        seen.add(url)
+        print(f"\n  ── {url} ──")
+        for label, payload in PAYLOADS:
+            if call(url, payload, label):
+                hits.append(url)
+                break
     return hits
 
 
 # ----------------------------------------------------------------------
-# 第四階段：舊網域是否還活著
+# 階段 3：舊網域的表單查詢（第三輪已證實舊網域會回真實內容）
 # ----------------------------------------------------------------------
 
 
-def probe_legacy_host() -> None:
-    """第二輪在頁面連結裡看到仍指向 mopsov 的舊網址，實測是否還能用。"""
-    rule("階段 4：舊網域 mopsov.twse.com.tw 是否仍供應報表")
+def probe_legacy_forms() -> list[str]:
+    rule("階段 3：舊網域 mopsov 的彙總報表表單查詢")
 
-    targets = [
-        f"{LEGACY}/mops/web/t141sb02",
-        f"{LEGACY}/mops/web/t100sb07",
-        f"{LEGACY}/mops/web/t163sb04",
-        f"{LEGACY}/server-java/t164sb01",
-    ]
-    for url in targets:
-        try:
-            response = SESSION.get(url, timeout=TIMEOUT)
-        except Exception as exc:  # noqa: BLE001
-            print(f"  ✗ {url} → {type(exc).__name__}: {exc}")
-            continue
-        body = response.text or ""
-        redirect = "location.href" in body
-        print(
-            f"  {'✗ 轉址殘骸' if redirect else '?'} {url} → "
-            f"HTTP {response.status_code}, {len(body):,}B\n"
-            f"      {preview(body, 240)}"
-        )
+    form = {
+        "encodeURIComponent": "1",
+        "step": "1",
+        "firstin": "1",
+        "off": "1",
+        "TYPEK": "sii",
+        "year": "114",
+        "season": "01",
+    }
+    legacy_headers = {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Referer": f"{LEGACY}/mops/web/t163sb04",
+        "Origin": LEGACY,
+    }
+
+    hits: list[str] = []
+    for code, label in TARGETS.items():
+        for prefix in ("ajax_", ""):
+            url = f"{LEGACY}/mops/web/{prefix}{code}"
+            try:
+                response = SESSION.post(
+                    url, data=form, headers=legacy_headers, timeout=TIMEOUT
+                )
+            except Exception as exc:  # noqa: BLE001
+                print(f"  ✗ {url} → {type(exc).__name__}: {exc}")
+                continue
+
+            body = response.text or ""
+            # 彙總報表的特徵：整頁表格，含公司代號欄與大量 <tr>。
+            rows = body.count("<tr")
+            has_header = "公司代號" in body or "公司名稱" in body
+            marker = "  ★ 疑似彙總表" if rows > 50 and has_header else ""
+            print(
+                f"\n  {url}（{label}）→ HTTP {response.status_code}, "
+                f"{len(body):,}B, {rows} 個 <tr>, 含公司代號={has_header}{marker}"
+            )
+            print(f"    {preview(body, 300)}")
+
+            if marker:
+                hits.append(url)
+                # 表頭是寫解析器的依據，完整印出來。
+                header = re.search(r"<tr[^>]*>(.{0,2500}?)</tr>", body, re.S)
+                if header:
+                    print(f"\n    ── 表頭 ──\n    {preview(header.group(1), 1600)}")
+                first_data = re.findall(r"<tr[^>]*>(.{0,2500}?)</tr>", body, re.S)
+                for row in first_data[1:4]:
+                    print(f"\n    ── 資料列 ──\n    {preview(row, 900)}")
+    return hits
 
 
 # ----------------------------------------------------------------------
 
 
 def main() -> int:
-    bundles = fetch_bundles()
-    codes = mine_bundles(bundles)
-    hits = probe_codes(codes)
-    probe_legacy_host()
+    discovered, _params = mine_chunks()
+    api_hits = probe_new_api(discovered)
+    legacy_hits = probe_legacy_forms()
 
     rule("結論")
-    if hits:
-        print(f"✓ 有回資料的端點：{hits}")
-        print("  → 下一步：依實際欄位寫 sources/mops.py 的解析器，不需瀏覽器")
-    else:
-        print("✗ 本輪沒有任何端點回傳資料。")
-        print("  → 看階段 2 的「中文報表名稱上下文」找出正確代碼與參數名，")
-        print("     或改用 Playwright 實際操作查詢表單（一個 context 只載一頁，")
-        print("     並在任何導航前讀完 response body）。")
+    if api_hits:
+        print(f"✓ 新版 API 可用：{api_hits}")
+        print("  → 首選。JSON 回應最好解析，依實際欄位寫 sources/mops.py")
+    if legacy_hits:
+        print(f"✓ 舊網域彙總報表可用：{legacy_hits}")
+        print("  → 備案。HTML 表格，解析器要對表頭做 SchemaWatch 檢查")
+    if not api_hits and not legacy_hits:
+        print("✗ 兩條路都沒拿到資料。")
+        print("  → 看階段 1 印出的「送出請求處」找出正確的 group 與參數名；")
+        print("     若 chunk 讀不到，改用 Playwright 實際操作查詢表單並側錄")
+        print("     （一個 context 只載一頁，任何導航前先讀完 response body）。")
     return 0
 
 
