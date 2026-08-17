@@ -206,7 +206,33 @@ class DataLoader:
     # 批次
     # ------------------------------------------------------------------
 
+    def classify_markets(self, constituents: ConstituentSet) -> None:
+        """判定每檔成分股屬於上市（TWSE）或上櫃（TPEx）。
+
+        持股 API 只給代號與名稱，沒有市場別，但財報端點分屬兩個交易所，
+        搞錯就整批抓不到資料。以證交所的每日收盤行情清單為準：
+        在清單內即為上市，否則歸為上櫃。
+
+        清單抓不到時保持預設（TWSE）並記錄警告——猜錯市場別會導致缺料，
+        缺料會被正確標示，不會變成錯誤數字。
+        """
+        try:
+            listed = self.twse._fetch_indexed("daily_price", id_fields=("Code", "公司代號"))
+        except SourceUnavailable as exc:
+            self.warnings.append(
+                f"無法取得上市股票清單，成分股市場別一律以上市處理：{exc}"
+            )
+            return
+
+        if not listed:
+            return
+
+        for constituent in constituents.constituents:
+            constituent.market = "TWSE" if constituent.stock_id in listed else "TPEx"
+
     def load_all(self, constituents: ConstituentSet) -> list[LoadedCompany]:
+        self.classify_markets(constituents)
+
         loaded: list[LoadedCompany] = []
         for constituent in constituents.constituents:
             try:

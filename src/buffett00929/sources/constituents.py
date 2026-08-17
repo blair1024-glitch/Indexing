@@ -15,7 +15,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable
 
@@ -95,7 +95,6 @@ class ConstituentResolver:
         providers = self.config.get("providers") or []
 
         handlers: dict[str, Callable[[dict], ConstituentSet]] = {
-            "twse_pcf": self._from_twse_pcf,
             "fuhwa_official": self._from_fuhwa,
             "manual": self._from_manual,
         }
@@ -123,7 +122,7 @@ class ConstituentResolver:
         raise ConstituentsUnavailable(
             "無法取得 00929 成分股名單，已中止分析（不使用過期資料）。\n"
             + "\n".join(f"  - {a}" for a in attempts)
-            + "\n\n請確認網路可連線至證交所／復華投信，"
+            + "\n\n請確認網路可連線至復華投信官網，"
             f"或在 {self.config.get('providers', [{}])[-1].get('path', 'data/manual/constituents.yaml')} "
             "填入最新名單與 as_of 日期。"
         )
@@ -132,51 +131,116 @@ class ConstituentResolver:
     # 官方來源
     # ------------------------------------------------------------------
 
-    def _from_twse_pcf(self, provider: dict) -> ConstituentSet:
-        """證交所 ETF 申購買回清單（PCF）——官方每日揭露的實際持股籃。"""
-        payload = self.http.get_json(provider["url"], params=provider.get("params"))
-        records = _extract_records(payload)
-        if not records:
-            raise SourceUnavailable("PCF 回應中找不到持股明細")
+    def _from_fuhwa(self, provider: dict) -> ConstituentSet:
+        """復華投信官方持股 API——00929 成分股的權威來源。
 
-        constituents = []
-        for record in records:
-            stock_id = _first_str(record, ("股票代號", "stockNo", "code", "Code", "成分股代號"))
-            name = _first_str(record, ("股票名稱", "stockName", "name", "Name", "成分股名稱"))
-            if not stock_id or not _looks_like_stock_id(stock_id):
+        00929 的持股明細由**發行投信**（復華）公告，不是證交所。
+        證交所 OpenAPI 的 143 個端點裡沒有任何 ETF 成分股資料
+        （已比對 `成分`／`PCF`／`申購買回`／`holding`／`composition` 皆 0 筆）。
+
+        官網頁面雖是 JS 渲染，但其前端呼叫的是一個純 JSON 端點，
+        直接打這個端點即可，不需要瀏覽器自動化——少一個沉重相依，
+        而且網站改版時 API 通常比 DOM 選擇器穩定。
+
+        回應結構（實測確認）::
+
+            result[0]
+              etf002  "00929"          ← 用來確認抓到的是正確的基金
+              ec038   追蹤指數名稱
+              dDate   資料日期
+              detail  [ {ftype, stockid, stockname, qshare,
+                         mvalue, price, prate_addaccint}, … ]
+              summary [ {ftype, totValue, totRatio}, … ]
+
+        ``qDate`` 為必填（省略會回傳 HTML），且**非交易日回空結果**，
+        因此需要往前回溯到最近一個有資料的日期。
+        """
+        url = provider["url"]
+        fund_id = str(provider.get("fund_id", "ETF21"))
+        expected_etf = str(provider.get("expected_etf_id", "00929"))
+        lookback = int(provider.get("lookback_days", 10))
+
+        tried: list[str] = []
+        for offset in range(lookback + 1):
+            as_of = date.today() - timedelta(days=offset)
+            params = {"fundID": fund_id, "qDate": as_of.strftime("%Y/%m/%d")}
+
+            payload = self.http.get_json(url, params=params)
+            entry = _fuhwa_entry(payload)
+            if entry is None:
+                tried.append(as_of.isoformat())
                 continue
-            weight_raw = _first_value(record, ("權重", "weight", "比重", "持股權重(%)"))
-            shares_raw = _first_value(record, ("股數", "shares", "申購股數", "持股股數"))
-            weight = parse_number(weight_raw)
+
+            # 確認抓到的確實是 00929——fundID 是投信內部代號，
+            # 萬一對應改變，這道檢查會擋下錯誤的基金。
+            actual_etf = str(entry.get("etf002") or "").strip()
+            if actual_etf and actual_etf != expected_etf:
+                raise SourceUnavailable(
+                    f"fundID={fund_id} 對應到的是 {actual_etf}，不是預期的 {expected_etf}；"
+                    "請確認 sources.yaml 的 fund_id 設定"
+                )
+
+            return self._parse_fuhwa_entry(entry, as_of, url, provider)
+
+        raise SourceUnavailable(
+            f"往前回溯 {lookback} 天皆無持股資料（已試 {', '.join(tried[:5])}…）；"
+            "可能是連續假期或端點結構已變更"
+        )
+
+    def _parse_fuhwa_entry(
+        self, entry: dict, requested: date, url: str, provider: dict
+    ) -> ConstituentSet:
+        """把 detail 陣列轉成成分股清單。只取 ``ftype='股票'``。"""
+        data_date = _parse_slash_date(entry.get("dDate")) or requested
+        source = f"復華投信官方持股 API（fundID={provider.get('fund_id', 'ETF21')}）"
+
+        constituents: list[Constituent] = []
+        skipped: dict[str, int] = {}
+
+        for row in entry.get("detail") or []:
+            if not isinstance(row, dict):
+                continue
+            ftype = str(row.get("ftype") or "").strip()
+            if ftype != "股票":
+                # 期貨與現金部位也在 detail 裡，不是成分股。
+                skipped[ftype or "未分類"] = skipped.get(ftype or "未分類", 0) + 1
+                continue
+
+            stock_id = str(row.get("stockid") or "").strip()
+            if not _looks_like_stock_id(stock_id):
+                skipped["代號格式不符"] = skipped.get("代號格式不符", 0) + 1
+                continue
+
+            # prate_addaccint 形如 "3.790%"，parse_number 會去掉 % 號。
+            weight_pct = parse_number(row.get("prate_addaccint"))
             constituents.append(
                 Constituent(
                     stock_id=stock_id,
-                    name=name or stock_id,
-                    # 官方以百分比揭露，轉為小數。
+                    name=str(row.get("stockname") or stock_id).strip(),
                     weight=DataPoint.of(
-                        weight / 100 if weight is not None else None,
-                        "TWSE:etfPCF",
-                        as_of=date.today(),
-                        url=provider["url"],
+                        weight_pct / 100 if weight_pct is not None else None,
+                        source,
+                        as_of=data_date,
+                        url=url,
                     ),
-                    shares=DataPoint.of(parse_number(shares_raw), "TWSE:etfPCF", as_of=date.today()),
+                    shares=DataPoint.of(
+                        parse_number(row.get("qshare")), source, as_of=data_date
+                    ),
                 )
             )
+
         if not constituents:
-            raise SourceUnavailable("PCF 回應中沒有可辨識的成分股代號")
+            raise SourceUnavailable(
+                f"{data_date} 的 detail 中沒有 ftype='股票' 的項目"
+                + (f"（略過：{skipped}）" if skipped else "")
+            )
+
+        index_name = str(entry.get("ec038") or "").strip()
+        note = f"，追蹤指數：{index_name}" if index_name else ""
         return ConstituentSet(
-            constituents=constituents, source="TWSE:etfPCF（證交所申購買回清單）", as_of=date.today()
-        )
-
-    def _from_fuhwa(self, provider: dict) -> ConstituentSet:
-        """復華投信官網。
-
-        該頁面為 JavaScript 動態載入，純 HTTP 取回的 HTML 通常不含持股表格。
-        這裡明確以失敗回報並說明原因，而不是回傳一份殘缺名單。
-        """
-        raise SourceUnavailable(
-            "復華官網 00929 頁面為 JS 動態渲染，純 HTTP 無法取得持股表；"
-            "如需啟用請改用瀏覽器自動化，或使用人工名單"
+            constituents=constituents,
+            source=f"{source}{note}",
+            as_of=data_date,
         )
 
     # ------------------------------------------------------------------
@@ -304,38 +368,39 @@ def diff_constituents(
 # --------------------------------------------------------------------------
 
 
-def _extract_records(payload: Any) -> list[dict]:
-    """從各種可能的回應包裝中取出記錄陣列。
+def _fuhwa_entry(payload: Any) -> dict | None:
+    """取出復華回應的第一筆 result，並確認它含有持股明細。
 
-    證交所的 JSON 端點包裝方式並不統一（``data`` / ``result`` / 直接陣列），
-    因此逐一嘗試而不是假設單一結構。
+    非交易日會回 ``{"result": []}`` 或 ``dDate: null``，
+    兩者都視為「這天沒有資料」，由呼叫端往前再試一天。
     """
-    if isinstance(payload, list):
-        return [r for r in payload if isinstance(r, dict)]
-    if isinstance(payload, dict):
-        for key in ("data", "result", "aaData", "records", "constituents", "holdings"):
-            value = payload.get(key)
-            if isinstance(value, list) and value and isinstance(value[0], dict):
-                return value
-        # 部分端點回傳 fields + data 的二維陣列組合。
-        fields = payload.get("fields")
-        rows = payload.get("data")
-        if isinstance(fields, list) and isinstance(rows, list) and rows:
-            if isinstance(rows[0], list):
-                return [dict(zip(fields, row)) for row in rows if isinstance(row, list)]
-    return []
+    if not isinstance(payload, dict):
+        return None
+    outer = payload.get("result")
+    if not isinstance(outer, list) or not outer:
+        return None
+    entry = outer[0]
+    if not isinstance(entry, dict):
+        return None
+    if not entry.get("dDate"):
+        return None
+    detail = entry.get("detail")
+    if not isinstance(detail, list) or not detail:
+        return None
+    return entry
 
 
-def _first_str(record: dict, keys: tuple[str, ...]) -> str | None:
-    value = _first_value(record, keys)
-    return str(value).strip() if value not in (None, "") else None
-
-
-def _first_value(record: dict, keys: tuple[str, ...]) -> Any:
-    for key in keys:
-        if key in record and record[key] not in (None, ""):
-            return record[key]
-    return None
+def _parse_slash_date(value: Any) -> date | None:
+    """解析 ``2026/08/17`` 格式的日期。"""
+    if not value:
+        return None
+    parts = str(value).strip().split("/")
+    if len(parts) != 3:
+        return None
+    try:
+        return date(int(parts[0]), int(parts[1]), int(parts[2]))
+    except ValueError:
+        return None
 
 
 def _looks_like_stock_id(text: str) -> bool:
