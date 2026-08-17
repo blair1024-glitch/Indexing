@@ -3,172 +3,203 @@
 
 **這是一次性的診斷工具，不是正式流程的一部分。**
 
-背景：證交所 OpenAPI 的 143 個端點裡沒有任何 ETF 成分股資料
-（已比對 `成分` / `PCF` / `申購買回` / `holding` / `composition` 皆 0 筆），
-而復華官網是 JS 動態渲染，純 HTTP 拿不到持股表。
+第一輪探測（側錄復華頁面的 XHR 流量）已找到目標端點：
 
-因此需要在**網路可通的環境**（GitHub Actions）實際探測，回答兩個問題：
+    https://www.fhtrust.com.tw/api/assets?fundID=ETF21&qDate=YYYY/MM/DD
 
-1. 復華頁面背後是否有一個回傳 JSON 的 API？
-   若有，直接打那個端點遠比用瀏覽器爬 DOM 穩定。
-2. 若沒有，DOM 裡的持股表格長什麼樣？
+回應含 ``etf002: "00929"``、``ec038``（追蹤指數）、``pcf_FundNav``
+與一個巢狀 ``result`` 陣列（``ftype: 股票``）。
 
-用法（在 GitHub Actions 上執行）：
+第二輪（本檔現在的內容）要回答三個決定實作方式的問題：
+
+1. 這個端點用**純 HTTP**（不開瀏覽器）打得通嗎？
+   若可以，正式流程就不需要 Playwright——少一個沉重且易碎的相依。
+2. 巢狀結構與欄位名稱到底長什麼樣？（決定解析器怎麼寫）
+3. ``qDate`` 的行為：假日或未來日期會回什麼？（決定要不要往前找交易日）
+
+用法（須在網路可通的環境執行，例如 GitHub Actions）：
 
     python scripts/probe_constituent_sources.py
-
-輸出會列出頁面載入期間的所有 XHR/fetch 回應，
-以及各候選 HTTP 端點的實際回應開頭。
 """
 
 from __future__ import annotations
 
 import json
 import sys
+from datetime import date, timedelta
 from typing import Any
 
-FUHWA_URL = "https://www.fhtrust.com.tw/ETF/etf_detail/ETF21"
+BASE = "https://www.fhtrust.com.tw/api"
+FUND_ID = "ETF21"  # 復華內部代號，對應 00929
 
-# 純 HTTP 候選端點。逐一實際請求並印出回應開頭，不猜測。
-HTTP_CANDIDATES = [
-    ("TWSE ETF 專區頁", "https://www.twse.com.tw/zh/ETFortune/etfInfo/00929", None),
-    ("TWSE rwd etfPCF", "https://www.twse.com.tw/rwd/zh/ETF/etfPCF", {"stkNo": "00929", "response": "json"}),
-    ("TWSE exchangeReport etfPCF", "https://www.twse.com.tw/exchangeReport/etfPCF", {"stkNo": "00929", "response": "json"}),
-    ("TWSE 基金基本資料彙總表", "https://openapi.twse.com.tw/v1/opendata/t187ap47_L", None),
-    ("TPEx openapi 首頁", "https://www.tpex.org.tw/openapi/v1/", None),
-]
-
-PREVIEW = 400
-"""每個回應印出的字元數。夠判斷格式，又不會把 log 灌爆。"""
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (probe) buffett00929/0.1",
+    "Accept": "application/json",
+}
 
 
-def _preview(text: str, limit: int = PREVIEW) -> str:
-    text = text.strip().replace("\n", " ")
-    return text[:limit] + ("…" if len(text) > limit else "")
-
-
-def probe_http() -> None:
+def fetch(label: str, path: str, params: dict | None = None) -> Any:
     import requests
 
-    print("=" * 78)
-    print("一、純 HTTP 候選端點")
-    print("=" * 78)
-
-    for label, url, params in HTTP_CANDIDATES:
-        print(f"\n--- {label} ---\n{url}")
-        try:
-            response = requests.get(
-                url,
-                params=params,
-                timeout=25,
-                headers={"User-Agent": "Mozilla/5.0 (probe) buffett00929/0.1"},
-            )
-        except Exception as exc:  # noqa: BLE001 - 探測工具，任何錯誤都要看到
-            print(f"  ✗ 請求失敗：{type(exc).__name__}: {exc}")
-            continue
-
-        content_type = response.headers.get("content-type", "?")
-        print(f"  HTTP {response.status_code} | {content_type} | {len(response.content)} bytes")
-        try:
-            payload = response.json()
-        except ValueError:
-            print(f"  非 JSON。內容開頭：{_preview(response.text)}")
-            continue
-
-        print(f"  ✓ JSON，頂層型別 {type(payload).__name__}")
-        if isinstance(payload, dict):
-            print(f"    keys: {list(payload)[:15]}")
-        elif isinstance(payload, list) and payload:
-            print(f"    {len(payload)} 筆，第一筆 keys: {list(payload[0])[:15] if isinstance(payload[0], dict) else payload[0]}")
-
-
-def probe_fuhwa_network() -> None:
-    """載入復華頁面並側錄所有 XHR/fetch 回應。
-
-    JS 頁面的持股表一定是從某個端點抓來的。找到那個端點就能直接打，
-    比在 DOM 上爬表格穩定得多——版面改了 DOM 就變，API 通常不會。
-    """
+    url = f"{BASE}{path}"
+    print(f"\n--- {label} ---\n{url}  params={params}")
     try:
-        from playwright.sync_api import sync_playwright
-    except ImportError:
-        print("\n✗ 未安裝 playwright，略過瀏覽器探測")
+        response = requests.get(url, params=params, headers=HEADERS, timeout=30)
+    except Exception as exc:  # noqa: BLE001 - 探測工具，任何錯誤都要看到
+        print(f"  ✗ 請求失敗：{type(exc).__name__}: {exc}")
+        return None
+
+    print(f"  HTTP {response.status_code} | {response.headers.get('content-type', '?')}")
+    if response.status_code != 200:
+        print(f"  內容開頭：{response.text[:300]}")
+        return None
+
+    try:
+        return response.json()
+    except ValueError:
+        print(f"  ✗ 非 JSON。開頭：{response.text[:300]}")
+        return None
+
+
+def describe(value: Any, indent: int = 4, depth: int = 0, max_depth: int = 4) -> None:
+    """遞迴描述 JSON 結構，只印型別與少量樣本，避免把 log 灌爆。"""
+    pad = " " * indent
+    if depth > max_depth:
+        print(f"{pad}…（超過深度上限）")
         return
 
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if isinstance(item, (dict, list)):
+                size = len(item)
+                print(f"{pad}{key}: {type(item).__name__}[{size}]")
+                describe(item, indent + 2, depth + 1, max_depth)
+            else:
+                preview = str(item)
+                if len(preview) > 60:
+                    preview = preview[:60] + "…"
+                print(f"{pad}{key}: {preview!r}")
+    elif isinstance(value, list):
+        if not value:
+            print(f"{pad}（空陣列）")
+            return
+        print(f"{pad}[0] 為 {type(value[0]).__name__}：")
+        describe(value[0], indent + 2, depth + 1, max_depth)
+        if len(value) > 1:
+            print(f"{pad}…另有 {len(value) - 1} 筆同型元素")
+
+
+def probe_assets() -> None:
+    """主目標：持股明細。"""
+    print("=" * 78)
+    print("一、持股明細 /api/assets —— 純 HTTP，未開瀏覽器")
+    print("=" * 78)
+
+    today = date.today()
+    payload = fetch(
+        "assets（今日）", "/assets", {"fundID": FUND_ID, "qDate": today.strftime("%Y/%m/%d")}
+    )
+
+    if payload is None:
+        print("\n✗ 純 HTTP 取不到——正式流程仍需 Playwright")
+        return
+
+    print("\n✓ 純 HTTP 可取得，不需瀏覽器")
+    print("\n【完整結構】")
+    describe(payload)
+
+    # 把最外層那筆的巢狀 result 挖出來——那應該就是持股明細。
+    outer = (payload.get("result") or [{}])[0] if isinstance(payload, dict) else {}
+    holdings = outer.get("result")
+    if isinstance(holdings, list) and holdings:
+        print(f"\n【巢狀 result：{len(holdings)} 個資產類別】")
+        for group in holdings:
+            if not isinstance(group, dict):
+                continue
+            ftype = group.get("ftype") or group.get("itemName")
+            # 找出這個類別下的明細陣列（欄位名未知，逐一找 list）。
+            for key, item in group.items():
+                if isinstance(item, list) and item:
+                    print(f"\n  ftype={ftype!r} → 明細欄位 {key!r}，{len(item)} 筆")
+                    print("  第一筆完整內容：")
+                    print(
+                        "    "
+                        + json.dumps(item[0], ensure_ascii=False, indent=2).replace("\n", "\n    ")
+                    )
+                    if len(item) > 1:
+                        print("  第二筆：")
+                        print(
+                            "    "
+                            + json.dumps(item[1], ensure_ascii=False, indent=2).replace(
+                                "\n", "\n    "
+                            )
+                        )
+
+
+def probe_date_behaviour() -> None:
+    """qDate 的行為決定要不要往前回溯交易日。"""
     print("\n" + "=" * 78)
-    print("二、復華官網載入期間的 XHR / fetch 回應")
+    print("二、qDate 行為：假日／未來日期會回什麼？")
     print("=" * 78)
-    print(f"目標：{FUHWA_URL}\n")
 
-    captured: list[dict[str, Any]] = []
+    today = date.today()
+    for label, when in (
+        ("未來日期（+7 天）", today + timedelta(days=7)),
+        ("一週前", today - timedelta(days=7)),
+        ("一個月前", today - timedelta(days=30)),
+    ):
+        payload = fetch(label, "/assets", {"fundID": FUND_ID, "qDate": when.strftime("%Y/%m/%d")})
+        if not isinstance(payload, dict):
+            continue
+        outer = (payload.get("result") or [{}])
+        if not outer:
+            print("  → result 為空陣列")
+            continue
+        entry = outer[0] if isinstance(outer[0], dict) else {}
+        inner = entry.get("result")
+        count = len(inner) if isinstance(inner, list) else 0
+        print(f"  → dDate={entry.get('dDate')!r}，巢狀 result {count} 個類別")
 
-    with sync_playwright() as playwright:
-        browser = playwright.chromium.launch()
-        page = browser.new_page()
+    # 省略 qDate 時的行為——若能自動給最新，實作可以更簡單。
+    payload = fetch("省略 qDate", "/assets", {"fundID": FUND_ID})
+    if isinstance(payload, dict):
+        outer = payload.get("result") or []
+        entry = outer[0] if outer and isinstance(outer[0], dict) else {}
+        print(f"  → dDate={entry.get('dDate')!r}")
 
-        def on_response(response) -> None:
-            resource = response.request.resource_type
-            if resource not in ("xhr", "fetch"):
-                return
-            entry = {
-                "url": response.url,
-                "status": response.status,
-                "content_type": response.headers.get("content-type", "?"),
-                "body": "",
-            }
-            try:
-                entry["body"] = response.text()[: PREVIEW * 3]
-            except Exception as exc:  # noqa: BLE001
-                entry["body"] = f"(無法讀取內容：{exc})"
-            captured.append(entry)
 
-        page.on("response", on_response)
-
-        try:
-            page.goto(FUHWA_URL, wait_until="networkidle", timeout=60_000)
-        except Exception as exc:  # noqa: BLE001
-            print(f"頁面載入警告：{type(exc).__name__}: {exc}（仍會輸出已側錄的請求）")
-
-        page.wait_for_timeout(4000)
-
-        print(f"側錄到 {len(captured)} 個 XHR/fetch 回應：\n")
-        for index, entry in enumerate(captured, start=1):
-            print(f"[{index}] HTTP {entry['status']} | {entry['content_type']}")
-            print(f"    {entry['url']}")
-            body = entry["body"]
-            # 只有可能含成分股的回應才值得看內容。
-            looks_relevant = any(
-                token in body for token in ("股票", "代號", "權重", "持股", "成分", "stock", "weight")
-            )
-            marker = "  ★ 可能含成分股" if looks_relevant else ""
-            print(f"    內容開頭：{_preview(body, 300)}{marker}\n")
-
-        # DOM 後備：若沒有可用 API，就得知道表格長什麼樣。
-        print("-" * 78)
-        print("三、DOM 中的表格結構")
-        print("-" * 78)
-        tables = page.query_selector_all("table")
-        print(f"找到 {len(tables)} 個 <table>\n")
-        for index, table in enumerate(tables[:6], start=1):
-            text = (table.inner_text() or "").strip()
-            rows = [r for r in text.split("\n") if r.strip()]
-            print(f"[表格 {index}] {len(rows)} 列")
-            for row in rows[:6]:
-                print(f"    {row[:150]}")
-            print()
-
-        browser.close()
-
+def probe_companion_endpoints() -> None:
+    """同時側錄到的其他端點，可能取代目前缺料的欄位。"""
+    print("\n" + "=" * 78)
+    print("三、其他可用端點")
     print("=" * 78)
-    print("結論指引")
-    print("=" * 78)
-    print("· 若上方有標記「★ 可能含成分股」的 JSON 回應 → 直接接那個端點，不需瀏覽器")
-    print("· 若沒有，但 DOM 表格含代號與權重 → 用 Playwright 抓 DOM")
-    print("· 兩者皆無 → 官方自動化不可行，改以人工名單為主要來源")
+
+    today = date.today().strftime("%Y/%m/%d")
+    for label, path, params in (
+        ("基金基本資料", "/fund", {"fundID": FUND_ID}),
+        ("PCF 申購買回清單", "/ETFPcf", {"fundID": FUND_ID, "pcfDate": today}),
+        ("配息紀錄", "/fundDividend", {"m": "fund", "fundID": FUND_ID,
+                                        "sDate": "2023/01/01", "eDate": today,
+                                        "dateType": "divDate", "ec001": "3"}),
+    ):
+        payload = fetch(label, path, params)
+        if isinstance(payload, dict):
+            outer = payload.get("result") or []
+            print(f"  result 長度：{len(outer)}")
+            if outer and isinstance(outer[0], dict):
+                print(f"  第一筆 keys：{list(outer[0])[:25]}")
 
 
 def main() -> int:
-    probe_http()
-    probe_fuhwa_network()
+    probe_assets()
+    probe_date_behaviour()
+    probe_companion_endpoints()
+    print("\n" + "=" * 78)
+    print("結論指引")
+    print("=" * 78)
+    print("· /api/assets 若純 HTTP 可取得 → 實作直接用 requests，不需 Playwright")
+    print("· 依上方「第一筆完整內容」的欄位名寫解析器，不再猜測")
+    print("· 依 qDate 行為決定是否需要往前回溯交易日")
     return 0
 
 
