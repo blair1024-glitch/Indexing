@@ -1,0 +1,36 @@
+# 00929 成分股｜人工名單（最後備援）
+#
+# 僅在證交所 PCF 與復華官網都取不到時才會被使用。
+#
+# 使用方式：
+#   1. 到官方來源查最新持股明細：
+#        · 復華投信 https://www.fhtrust.com.tw/ETF/etf_detail/ETF21
+#        · 證交所   https://www.twse.com.tw/zh/ETFortune/etfInfo/00929
+#   2. 把成分股填進下方 constituents，weight 用**小數**（3.5% 寫 0.035）。
+#   3. as_of 填該名單的資料日期，不是你抄寫的日期。
+#
+# 保護機制：
+#   · as_of 超過 sources.yaml 的 manual_max_age_days（預設 45 天）會被拒用並中止分析，
+#     以免拿過期名單產生看起來很新的 Dashboard。
+#   · weight 留空不會被當成 0，會標示「資料不足」。
+#
+# 刻意留空：本專案不預先寫入任何成分股名單。公開資料對 00929 的成分股檔數
+# 說法並不一致（40 檔與 50 檔的說法都有），且成分股會定期換股，
+# 任何內建的名單都會在下次調整後變成錯誤資料。請以官方揭露為準。
+
+as_of: null
+source_note: ""
+
+constituents: []
+# 範例格式（取消註解並替換為官方最新資料）：
+# as_of: 2026-08-15
+# source_note: "復華投信官網 00929 持股明細，2026-08-15 揭露"
+# constituents:
+#   - stock_id: "2303"
+#     name: 聯電
+#     market: TWSE
+#     weight: 0.0512
+#   - stock_id: "5347"
+#     name: 世界先進
+#     market: TPEx
+#     weight: 0.0331

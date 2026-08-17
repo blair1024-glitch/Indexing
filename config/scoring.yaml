@@ -1,0 +1,396 @@
+# 巴菲特式 100 分評分模型設定
+#
+# 每個評分項目由若干「criteria」組成，每個 criterion 用門檻帶（bands）給分。
+# 這樣所有分數都可稽核：報表會列出每個 criterion 的實際數值、命中的門檻與得分。
+#
+# bands 規則：
+#   direction: higher_better → 由上往下找第一個 value >= threshold 的帶
+#   direction: lower_better  → 由上往下找第一個 value <= threshold 的帶
+#   threshold: null          → 保底帶（一定命中）
+#
+# 重要：若某 criterion 的輸入資料不足，該 criterion **不計分也不計入分母**，
+# 報表會顯示「72 / 85 可評分」而不是把缺料當成 0 分。
+
+# ---------------------------------------------------------------------------
+# 權重
+# ---------------------------------------------------------------------------
+# 註：使用者規格第三節寫 Margin of Safety 為 0~25 分，第九節的 100 分表寫 10 分。
+# 此處採第九節（明確加總為 100 的模型）為預設。若要改採第三節的 25 分，
+# 把 margin_of_safety.max_points 改成 25，系統會自動把總分重新換算回 100 分制，
+# 並在報表標示使用的權重組合。
+weights:
+  management: 20
+  moat: 25
+  roe: 15
+  stability: 15
+  financial_safety: 10
+  free_cash_flow: 5
+  margin_of_safety: 10
+
+# ---------------------------------------------------------------------------
+# M1 Management｜企業營運能力（20 分）
+# ---------------------------------------------------------------------------
+management:
+  criteria:
+    share_dilution:
+      label: 股本稀釋（在外流通股數年化成長率）
+      max_points: 5
+      direction: lower_better
+      rationale: 持續增資稀釋股東是巴菲特最反感的資本配置行為之一。
+      bands:
+        - {threshold: 0.005, points: 5, label: "幾乎無稀釋（≤0.5%）"}
+        - {threshold: 0.02, points: 3.5, label: "輕微稀釋（≤2%）"}
+        - {threshold: 0.05, points: 2, label: "中度稀釋（≤5%）"}
+        - {threshold: null, points: 0, label: "顯著稀釋（>5%）"}
+    roe_consistency:
+      label: ROE 穩定度（5 年 ROE 標準差）
+      max_points: 5
+      direction: lower_better
+      rationale: 管理階層能否在景氣循環中維持穩定報酬，是經營能力的直接證據。
+      bands:
+        - {threshold: 0.03, points: 5, label: "非常穩定（σ≤3%）"}
+        - {threshold: 0.06, points: 3.5, label: "穩定（σ≤6%）"}
+        - {threshold: 0.12, points: 2, label: "波動（σ≤12%）"}
+        - {threshold: null, points: 0, label: "大起大落（σ>12%）"}
+    reinvestment_return:
+      label: 盈餘再投資報酬（保留盈餘增量 vs 稅後淨利增量）
+      max_points: 5
+      direction: higher_better
+      rationale: 巴菲特的核心提問——公司把賺到的錢再投資，是否創造了對等的獲利成長。
+      bands:
+        - {threshold: 0.15, points: 5, label: "高效再投資（≥15%）"}
+        - {threshold: 0.10, points: 3.5, label: "良好（≥10%）"}
+        - {threshold: 0.05, points: 2, label: "普通（≥5%）"}
+        - {threshold: null, points: 0, label: "再投資未創造回報（<5%）"}
+    earnings_quality:
+      label: 盈餘品質（業外損益佔稅前淨利比重）
+      max_points: 5
+      direction: lower_better
+      rationale: 本業以外的一次性收益撐起的 EPS 不可持續，須辨識出來。
+      bands:
+        - {threshold: 0.10, points: 5, label: "獲利來自本業（業外≤10%）"}
+        - {threshold: 0.25, points: 3.5, label: "業外佔比可接受（≤25%）"}
+        - {threshold: 0.40, points: 1.5, label: "業外偏高（≤40%）"}
+        - {threshold: null, points: 0, label: "獲利高度依賴業外（>40%）"}
+
+# ---------------------------------------------------------------------------
+# M2 Moat｜經濟護城河（25 分）
+# ---------------------------------------------------------------------------
+moat:
+  criteria:
+    gross_margin_level:
+      label: 毛利率水準（5 年平均）
+      max_points: 7
+      direction: higher_better
+      rationale: 長期維持高毛利，代表產品有定價權而非殺價競爭。
+      bands:
+        - {threshold: 0.40, points: 7, label: "強定價權（≥40%）"}
+        - {threshold: 0.25, points: 5, label: "良好（≥25%）"}
+        - {threshold: 0.15, points: 3, label: "普通（≥15%）"}
+        - {threshold: null, points: 1, label: "低毛利，易陷價格競爭（<15%）"}
+    gross_margin_stability:
+      label: 毛利率波動度（5 年標準差）
+      max_points: 6
+      direction: lower_better
+      rationale: 護城河的證據不只是毛利高，更在於景氣下行時守得住。
+      bands:
+        - {threshold: 0.02, points: 6, label: "極穩定（σ≤2%）"}
+        - {threshold: 0.04, points: 4.5, label: "穩定（σ≤4%）"}
+        - {threshold: 0.08, points: 2.5, label: "波動（σ≤8%）"}
+        - {threshold: null, points: 0, label: "高度週期性（σ>8%）"}
+    operating_margin_level:
+      label: 營益率水準（5 年平均）
+      max_points: 6
+      direction: higher_better
+      rationale: 毛利要能穿透費用結構變成營業利益，才是真的有護城河。
+      bands:
+        - {threshold: 0.20, points: 6, label: "優異（≥20%）"}
+        - {threshold: 0.12, points: 4.5, label: "良好（≥12%）"}
+        - {threshold: 0.06, points: 2.5, label: "普通（≥6%）"}
+        - {threshold: null, points: 0, label: "薄利（<6%）"}
+    rnd_intensity:
+      label: 研發費用率（技術護城河代理指標）
+      max_points: 3
+      direction: higher_better
+      rationale: 科技業的進入障礙多來自持續研發投入。
+      bands:
+        - {threshold: 0.08, points: 3, label: "高研發投入（≥8%）"}
+        - {threshold: 0.04, points: 2, label: "中等（≥4%）"}
+        - {threshold: 0.01, points: 1, label: "偏低（≥1%）"}
+        - {threshold: null, points: 0, label: "幾無研發投入（<1%）"}
+    scale:
+      label: 營收規模（市場地位代理指標，新台幣億元）
+      max_points: 3
+      direction: higher_better
+      rationale: 規模帶來採購與製造的成本優勢，是成本型護城河的代理。
+      bands:
+        - {threshold: 1000, points: 3, label: "產業級規模（≥1000 億）"}
+        - {threshold: 300, points: 2, label: "中大型（≥300 億）"}
+        - {threshold: 100, points: 1, label: "中型（≥100 億）"}
+        - {threshold: null, points: 0, label: "小型（<100 億）"}
+  # 護城河強度分級（依 moat 得分佔滿分比例）
+  grades:
+    - {min_ratio: 0.85, label: 非常強}
+    - {min_ratio: 0.68, label: 強}
+    - {min_ratio: 0.50, label: 中}
+    - {min_ratio: 0.30, label: 弱}
+    - {min_ratio: 0.0, label: 無}
+
+# ---------------------------------------------------------------------------
+# ROE 與資本效率（15 分）
+# ---------------------------------------------------------------------------
+roe:
+  criteria:
+    roe_5y_avg:
+      label: 5 年平均 ROE
+      max_points: 6
+      direction: higher_better
+      bands:
+        - {threshold: 0.20, points: 6, label: "卓越（≥20%）"}
+        - {threshold: 0.15, points: 5, label: "優秀（≥15%）"}
+        - {threshold: 0.10, points: 3.5, label: "合格（≥10%）"}
+        - {threshold: null, points: 1, label: "偏低（<10%）"}
+    roe_latest:
+      label: 最近一年 ROE
+      max_points: 4
+      direction: higher_better
+      bands:
+        - {threshold: 0.20, points: 4, label: "卓越（≥20%）"}
+        - {threshold: 0.15, points: 3.2, label: "優秀（≥15%）"}
+        - {threshold: 0.10, points: 2, label: "合格（≥10%）"}
+        - {threshold: null, points: 0.5, label: "偏低（<10%）"}
+    roe_trend:
+      label: ROE 趨勢（近 3 年平均 vs 前 3 年平均差額）
+      max_points: 3
+      direction: higher_better
+      bands:
+        - {threshold: 0.02, points: 3, label: "改善中（+2pp 以上）"}
+        - {threshold: -0.01, points: 2, label: "持平"}
+        - {threshold: -0.04, points: 1, label: "略降"}
+        - {threshold: null, points: 0, label: "明顯下滑"}
+    leverage_quality:
+      label: 權益乘數（辨識「高 ROE 但靠高負債」）
+      max_points: 2
+      direction: lower_better
+      rationale: 規格第四節與第七節明訂——靠槓桿撐出來的高 ROE 不能給高分。
+      bands:
+        - {threshold: 1.8, points: 2, label: "低槓桿（≤1.8x）"}
+        - {threshold: 2.5, points: 1.5, label: "中度槓桿（≤2.5x）"}
+        - {threshold: 4.0, points: 0.5, label: "高槓桿（≤4x）"}
+        - {threshold: null, points: 0, label: "極高槓桿（>4x）"}
+  # 高 ROE + 高槓桿的組合會另外觸發標示（見 flags.high_roe_high_debt）
+  high_roe_threshold: 0.15
+  high_leverage_threshold: 2.5
+
+# ---------------------------------------------------------------------------
+# 獲利穩定性（15 分）
+# ---------------------------------------------------------------------------
+stability:
+  criteria:
+    eps_cagr:
+      label: EPS 5 年 CAGR
+      max_points: 5
+      direction: higher_better
+      bands:
+        - {threshold: 0.15, points: 5, label: "高成長（≥15%）"}
+        - {threshold: 0.07, points: 4, label: "穩健成長（≥7%）"}
+        - {threshold: 0.0, points: 2.5, label: "持平（≥0%）"}
+        - {threshold: null, points: 0, label: "衰退（<0%）"}
+    revenue_cagr:
+      label: 營收 5 年 CAGR
+      max_points: 3
+      direction: higher_better
+      bands:
+        - {threshold: 0.10, points: 3, label: "成長（≥10%）"}
+        - {threshold: 0.03, points: 2, label: "穩健（≥3%）"}
+        - {threshold: 0.0, points: 1, label: "持平（≥0%）"}
+        - {threshold: null, points: 0, label: "衰退（<0%）"}
+    profit_consistency:
+      label: 獲利連續性（5 年間虧損年數）
+      max_points: 4
+      direction: lower_better
+      rationale: 巴菲特要的是「可預測」，一次虧損就會大幅削弱可預測性。
+      bands:
+        - {threshold: 0, points: 4, label: "5 年皆獲利"}
+        - {threshold: 1, points: 2, label: "1 年虧損"}
+        - {threshold: null, points: 0, label: "多年虧損"}
+    margin_trend:
+      label: 營益率趨勢（近 3 年平均 vs 前 3 年平均差額）
+      max_points: 3
+      direction: higher_better
+      bands:
+        - {threshold: 0.01, points: 3, label: "改善中"}
+        - {threshold: -0.01, points: 2, label: "持平"}
+        - {threshold: -0.03, points: 1, label: "略降"}
+        - {threshold: null, points: 0, label: "明顯惡化"}
+
+# ---------------------------------------------------------------------------
+# 財務安全（10 分）
+# ---------------------------------------------------------------------------
+financial_safety:
+  criteria:
+    debt_ratio:
+      label: 負債比（總負債／總資產）
+      max_points: 3
+      direction: lower_better
+      bands:
+        - {threshold: 0.30, points: 3, label: "非常保守（≤30%）"}
+        - {threshold: 0.45, points: 2.2, label: "健康（≤45%）"}
+        - {threshold: 0.60, points: 1, label: "偏高（≤60%）"}
+        - {threshold: null, points: 0, label: "高負債（>60%）"}
+    debt_to_equity:
+      label: 有息負債／股東權益
+      max_points: 3
+      direction: lower_better
+      bands:
+        - {threshold: 0.20, points: 3, label: "幾無有息負債（≤0.2x）"}
+        - {threshold: 0.50, points: 2.2, label: "穩健（≤0.5x）"}
+        - {threshold: 1.0, points: 1, label: "偏高（≤1x）"}
+        - {threshold: null, points: 0, label: "高槓桿（>1x）"}
+    current_ratio:
+      label: 流動比率
+      max_points: 2
+      direction: higher_better
+      bands:
+        - {threshold: 2.0, points: 2, label: "充裕（≥2x）"}
+        - {threshold: 1.5, points: 1.5, label: "健康（≥1.5x）"}
+        - {threshold: 1.0, points: 0.8, label: "勉強（≥1x）"}
+        - {threshold: null, points: 0, label: "短期償債壓力（<1x）"}
+    debt_to_fcf:
+      label: 有息負債／自由現金流（幾年可還清）
+      max_points: 2
+      direction: lower_better
+      bands:
+        - {threshold: 1.0, points: 2, label: "1 年內可還清"}
+        - {threshold: 3.0, points: 1.5, label: "3 年內（≤3x）"}
+        - {threshold: 5.0, points: 0.7, label: "5 年內（≤5x）"}
+        - {threshold: null, points: 0, label: "還債能力弱（>5x 或 FCF 為負）"}
+
+# ---------------------------------------------------------------------------
+# 自由現金流（5 分）
+# ---------------------------------------------------------------------------
+free_cash_flow:
+  criteria:
+    fcf_margin:
+      label: FCF Margin（自由現金流／營收，5 年平均）
+      max_points: 2
+      direction: higher_better
+      bands:
+        - {threshold: 0.15, points: 2, label: "現金製造機（≥15%）"}
+        - {threshold: 0.08, points: 1.5, label: "良好（≥8%）"}
+        - {threshold: 0.0, points: 0.8, label: "為正（≥0%）"}
+        - {threshold: null, points: 0, label: "FCF 為負"}
+    fcf_to_net_income:
+      label: FCF／稅後淨利（盈餘含金量）
+      max_points: 2
+      direction: higher_better
+      rationale: 規格第六節——淨利很好但現金流很差，屬盈餘品質警告。
+      bands:
+        - {threshold: 0.80, points: 2, label: "獲利確實轉為現金（≥80%）"}
+        - {threshold: 0.50, points: 1.4, label: "尚可（≥50%）"}
+        - {threshold: 0.20, points: 0.6, label: "偏低（≥20%）"}
+        - {threshold: null, points: 0, label: "獲利未轉為現金（<20%）"}
+    reinvestment_rate:
+      label: 盈再率（資本支出／營業現金流）
+      max_points: 1
+      direction: lower_better
+      rationale: 賺 100 元要再投入多少才能維持競爭力（規格第六節核心提問）。
+      bands:
+        - {threshold: 0.30, points: 1, label: "高資本效率（≤30%）"}
+        - {threshold: 0.60, points: 0.6, label: "中等（≤60%）"}
+        - {threshold: null, points: 0, label: "資本密集（>60%）"}
+
+# ---------------------------------------------------------------------------
+# 安全邊際（10 分）
+# ---------------------------------------------------------------------------
+margin_of_safety:
+  criteria:
+    margin_of_safety:
+      label: 安全邊際 =（內在價值 − 股價）／內在價值
+      max_points: 10
+      direction: higher_better
+      bands:
+        - {threshold: 0.30, points: 10, label: "🟢 非常便宜（>30%）"}
+        - {threshold: 0.20, points: 8, label: "🟢 便宜（20~30%）"}
+        - {threshold: 0.10, points: 5.5, label: "🟡 合理偏便宜（10~20%）"}
+        - {threshold: 0.0, points: 3, label: "🟡 合理（0~10%）"}
+        - {threshold: null, points: 0, label: "🔴 高估（<0%）"}
+  # 規格第三節明訂需 2 種以上估值方法交叉驗證，否則不給安全邊際分數。
+  min_methods_required: 2
+  # 估值方法參數
+  valuation:
+    normalized_eps_years: 5
+    justified_pe_percentile: 0.5
+    pe_band_floor: 8.0
+    pe_band_cap: 30.0
+    required_yield: 0.05
+    dcf:
+      projection_years: 10
+      discount_rate: 0.09
+      terminal_growth: 0.02
+      max_growth_rate: 0.15
+    # 各方法算出的內在價值離散度若超過此值，標示「估值分歧大」
+    dispersion_warning: 0.40
+
+# ---------------------------------------------------------------------------
+# 投資等級（規格第十節）
+# ---------------------------------------------------------------------------
+grades:
+  - {min_score: 90, grade: "A+", label: 巴菲特式優質企業}
+  - {min_score: 80, grade: "A", label: 優質企業}
+  - {min_score: 70, grade: "B+", label: 值得長期追蹤}
+  - {min_score: 60, grade: "B", label: 普通}
+  - {min_score: 50, grade: "C", label: 謹慎}
+  - {min_score: 0, grade: "D", label: 不符合長期價值投資條件}
+
+# ---------------------------------------------------------------------------
+# 紅旗警報（規格第十六節）
+# ---------------------------------------------------------------------------
+red_flags:
+  # 觸發紅旗後的總分懲罰（分數，直接自 100 分制總分扣除）
+  penalties:
+    critical: 8
+    warning: 4
+    info: 0
+  max_total_penalty: 25
+  thresholds:
+    roe_decline_years: 3
+    margin_decline_years: 3
+    eps_decline_years: 3
+    receivables_growth_vs_revenue: 1.5
+    inventory_growth_vs_revenue: 1.5
+    share_expansion_annual: 0.05
+    payout_ratio_max: 1.0
+    non_operating_ratio_max: 0.40
+    debt_growth_annual: 0.30
+    dividend_yield_trap_min: 0.06
+
+# ---------------------------------------------------------------------------
+# 投資判斷（規格第十五節）
+# ---------------------------------------------------------------------------
+# 明確要求：不得只根據單季 EPS 判斷。因此判斷式一律讀取多年期指標與
+# 綜合分數，單季數字只能觸發「重新檢查」，不能單獨改變判斷。
+verdict:
+  buy:
+    min_total_score: 75
+    min_margin_of_safety: 0.20
+    max_critical_flags: 0
+  hold:
+    min_total_score: 60
+    min_margin_of_safety: -0.10
+    max_critical_flags: 1
+  reduce:
+    min_total_score: 50
+
+# ---------------------------------------------------------------------------
+# 7 年長期持有測試（規格第十七節）
+# ---------------------------------------------------------------------------
+seven_year_test:
+  yes:
+    min_business_quality: 70
+    min_moat_ratio: 0.60
+    max_critical_flags: 0
+  maybe:
+    min_business_quality: 55
+    min_moat_ratio: 0.40
+    max_critical_flags: 1
