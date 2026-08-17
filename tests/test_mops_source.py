@@ -14,7 +14,8 @@ from buffett00929.models import FiscalPeriod
 from buffett00929.sources.base import HttpClient
 from buffett00929.sources.mops import MopsClient, MopsHistory, scan_rows
 
-# 舊版 MOPS 的版面：表格是**巢狀**的，而且一頁有多個業別表格。
+# 版面依實測（2026-08-17）：表格**巢狀**、一頁 6 種業別表頭、
+# 欄名一律用**全形括號**、業別之間用詞不一致（資產總計／資產總額）。
 # 用 <table>…</table> 去切會在內層表格提早截斷——這正是要防的情況。
 NESTED_HTML = """
 <html><body>
@@ -25,31 +26,34 @@ NESTED_HTML = """
       <tr><td>註1：單位：新台幣仟元</td></tr>
       <tr>
         <td>公司代號</td><td>公司名稱</td><td>營業收入</td><td>營業成本</td>
-        <td>營業毛利(毛損)</td><td>營業利益(損失)</td><td>稅前淨利(淨損)</td>
-        <td>本期淨利(淨損)</td><td>淨利(淨損)歸屬於母公司業主</td>
-        <td>基本每股盈餘(元)</td>
+        <td>營業毛利（毛損）</td><td>營業毛利（毛損）淨額</td>
+        <td>營業利益（損失）</td><td>稅前淨利（淨損）</td>
+        <td>本期淨利（淨損）</td><td>淨利（淨損）歸屬於母公司業主</td>
+        <td>基本每股盈餘（元）</td>
       </tr>
       <tr>
         <td>2330</td><td>台積電</td><td>1,000,000</td><td>400,000</td>
-        <td>600,000</td><td>500,000</td><td>520,000</td>
+        <td>600,000</td><td>590,000</td><td>500,000</td><td>520,000</td>
         <td>430,000</td><td>420,000</td><td>16.10</td>
       </tr>
       <tr>
         <td>2317</td><td>鴻海</td><td>2,000,000</td><td>1,800,000</td>
-        <td>200,000</td><td>120,000</td><td>130,000</td>
+        <td>200,000</td><td>200,000</td><td>120,000</td><td>130,000</td>
         <td>100,000</td><td>95,000</td><td>2.50</td>
       </tr>
     </table>
   </td></tr>
   <tr><td>
     <table>
-      <tr><td colspan="5"><h2>金融保險業</h2></td></tr>
+      <tr><td colspan="6"><h2>金融保險業</h2></td></tr>
       <tr>
-        <td>公司代號</td><td>公司名稱</td><td>淨收益</td>
-        <td>本期淨利(淨損)</td><td>基本每股盈餘(元)</td>
+        <td>公司代號</td><td>公司名稱</td><td>利息淨收益</td><td>淨收益</td>
+        <td>本期稅後淨利（淨損）</td><td>淨利（損）歸屬於母公司業主</td>
+        <td>基本每股盈餘（元）</td>
       </tr>
       <tr>
-        <td>2882</td><td>國泰金</td><td>300,000</td><td>90,000</td><td>5.20</td>
+        <td>2882</td><td>國泰金</td><td>120,000</td><td>300,000</td>
+        <td>90,000</td><td>88,000</td><td>5.20</td>
       </tr>
     </table>
   </td></tr>
@@ -60,13 +64,23 @@ NESTED_HTML = """
 BALANCE_HTML = """
 <table><tr><td><table>
   <tr>
-    <td>公司代號</td><td>公司名稱</td><td>流動資產</td><td>資產總額</td>
-    <td>流動負債</td><td>負債總額</td>
-    <td>歸屬於母公司業主之權益合計</td><td>權益總額</td>
+    <td>公司代號</td><td>公司名稱</td><td>流動資產</td><td>資產總計</td>
+    <td>流動負債</td><td>負債總計</td>
+    <td>歸屬於母公司業主之權益合計</td><td>權益總計</td>
   </tr>
   <tr>
     <td>2330</td><td>台積電</td><td>900,000</td><td>3,000,000</td>
     <td>500,000</td><td>1,000,000</td><td>1,900,000</td><td>2,000,000</td>
+  </tr>
+</table></td></tr>
+<tr><td><table>
+  <tr>
+    <td>公司代號</td><td>公司名稱</td><td>現金及約當現金</td><td>資產總額</td>
+    <td>負債總額</td><td>歸屬於母公司業主之權益</td><td>權益總額</td>
+  </tr>
+  <tr>
+    <td>2882</td><td>國泰金</td><td>700,000</td><td>9,000,000</td>
+    <td>8,400,000</td><td>580,000</td><td>600,000</td>
   </tr>
 </table></td></tr></table>
 """
@@ -74,8 +88,8 @@ BALANCE_HTML = """
 CASHFLOW_HTML = """
 <table><tr><td><table>
   <tr>
-    <td>公司代號</td><td>公司名稱</td><td>營業活動之淨現金流入(流出)</td>
-    <td>投資活動之淨現金流入(流出)</td><td>籌資活動之淨現金流入(流出)</td>
+    <td>公司代號</td><td>公司名稱</td><td>營業活動之淨現金流入（流出）</td>
+    <td>投資活動之淨現金流入（流出）</td><td>籌資活動之淨現金流入（流出）</td>
   </tr>
   <tr>
     <td>2330</td><td>台積電</td><td>700,000</td><td>(500,000)</td><td>(150,000)</td>
@@ -105,6 +119,41 @@ class TestRowScanner:
         assert "營業收入" not in financial_header
         assert "淨收益" in financial_header
 
+
+class TestColumnNaming:
+    """實測的欄名一律用全形括號，而且業別之間用詞不一致。
+
+    這兩件事各自都會讓對應**部分**失敗——沒有括號的「營業收入」照樣命中，
+    看起來像業別差異而不是對應寫錯，是最難察覺的一種失敗。
+    """
+
+    def test_full_width_parentheses_are_matched(self, client):
+        parsed = client.parse_income(NESTED_HTML, Q1, TODAY)
+        assert parsed["2330"].operating_income.value == pytest.approx(500_000 * 1000)
+        assert parsed["2330"].eps.value == pytest.approx(16.10)
+
+    def test_gross_profit_prefers_the_net_figure(self, client):
+        """「淨額」已加計未實現／已實現銷貨損益，與營收同基礎。"""
+        parsed = client.parse_income(NESTED_HTML, Q1, TODAY)
+        assert parsed["2330"].gross_profit.value == pytest.approx(590_000 * 1000)
+
+    def test_bank_wording_for_the_parent_share_is_matched(self, client):
+        """銀行業寫「淨利（損）」，一般業寫「淨利（淨損）」。"""
+        parsed = client.parse_income(NESTED_HTML, Q1, TODAY)
+        assert parsed["2882"].net_income.value == pytest.approx(88_000 * 1000)
+
+    def test_total_and_sum_wording_both_map(self, client):
+        """一般業「資產總計」，金融業「資產總額」。"""
+        parsed = client.parse_balance(BALANCE_HTML, Q1, TODAY)
+        assert parsed["2330"].total_assets.value == pytest.approx(3_000_000 * 1000)
+        assert parsed["2882"].total_assets.value == pytest.approx(9_000_000 * 1000)
+
+    def test_equity_wording_variants_all_map(self, client):
+        """「…之權益合計」與「…之權益」都要對得上，否則 ROE 分母會缺。"""
+        parsed = client.parse_balance(BALANCE_HTML, Q1, TODAY)
+        assert parsed["2330"].total_equity.value == pytest.approx(1_900_000 * 1000)
+        assert parsed["2882"].total_equity.value == pytest.approx(580_000 * 1000)
+
     def test_note_rows_are_not_mistaken_for_data(self):
         """說明文字列與標題列的欄數對不上，必須被略過而不是解析成公司。"""
         ids = [row[0] for _h, row in scan_rows(NESTED_HTML)]
@@ -127,8 +176,9 @@ class TestIncomeParsing:
         assert parsed["2330"].net_income.value == pytest.approx(420_000 * 1000)
 
     def test_derived_margins_work_end_to_end(self, client):
+        """毛利率用「營業毛利（毛損）淨額」590,000 ÷ 營收 1,000,000。"""
         parsed = client.parse_income(NESTED_HTML, Q1, TODAY)
-        assert parsed["2330"].gross_margin.value == pytest.approx(0.6)
+        assert parsed["2330"].gross_margin.value == pytest.approx(0.59)
 
     def test_columns_absent_for_an_industry_are_missing_not_zero(self, client):
         """金融業沒有「營業成本」。填 0 會讓它的毛利率變成 100%。"""
@@ -230,3 +280,69 @@ class TestRequestShape:
 
         client.fetch_report("t163sb04", "sii", FiscalPeriod(2026, 2), today=TODAY)
         assert captured["immutable"] is False
+
+
+class TestSourcePriority:
+    """規格第十九節：官方優先指的是**同一欄位**誰說了算，不是誰整筆覆蓋誰。
+
+    整筆替換是最容易寫錯的地方，而且錯得很安靜——資料不會出錯，
+    只會憑空變少（官方端點沒有的欄位被抹掉），看起來像來源缺料。
+    """
+
+    def _merge(self, existing, incoming, *, overwrite):
+        from buffett00929.loader import _merge_statement
+        from buffett00929.models import Company
+
+        company = Company(stock_id="2330", name="台積電")
+        _merge_statement(existing, incoming, company, "綜合損益表", overwrite=overwrite)
+        return existing
+
+    def test_official_value_wins_the_same_field(self, client):
+        from buffett00929.models import DataPoint, IncomeStatement
+
+        existing = [IncomeStatement(period=Q1, revenue=DataPoint.of(100.0, "MOPS"))]
+        official = IncomeStatement(period=Q1, revenue=DataPoint.of(111.0, "TWSE"))
+
+        merged = self._merge(existing, official, overwrite=True)
+        assert merged[0].revenue.value == 111.0
+
+    def test_fields_the_new_source_lacks_are_kept(self, client):
+        """官方端點沒給研發費用時，不能把既有的值一起抹掉。"""
+        from buffett00929.models import DataPoint, IncomeStatement
+
+        existing = [
+            IncomeStatement(
+                period=Q1,
+                revenue=DataPoint.of(100.0, "MOPS"),
+                rnd_expense=DataPoint.of(9.0, "FinMind"),
+            )
+        ]
+        official = IncomeStatement(period=Q1, revenue=DataPoint.of(111.0, "TWSE"))
+
+        merged = self._merge(existing, official, overwrite=True)
+        assert merged[0].rnd_expense.value == 9.0
+
+    def test_fill_only_never_overwrites_official_numbers(self, client):
+        """FinMind 只補空缺——它的角色是細項來源，不是官方數字的替代品。"""
+        from buffett00929.models import DataPoint, IncomeStatement
+
+        existing = [IncomeStatement(period=Q1, revenue=DataPoint.of(100.0, "MOPS"))]
+        third_party = IncomeStatement(
+            period=Q1,
+            revenue=DataPoint.of(999.0, "FinMind"),
+            rnd_expense=DataPoint.of(9.0, "FinMind"),
+        )
+
+        merged = self._merge(existing, third_party, overwrite=False)
+        assert merged[0].revenue.value == 100.0
+        assert merged[0].rnd_expense.value == 9.0
+
+    def test_a_period_nobody_had_is_added_and_kept_sorted(self, client):
+        from buffett00929.models import DataPoint, IncomeStatement
+
+        existing = [IncomeStatement(period=FiscalPeriod(2025, 2))]
+        incoming = IncomeStatement(period=Q1, revenue=DataPoint.of(1.0, "MOPS"))
+
+        merged = self._merge(existing, incoming, overwrite=False)
+        assert [s.period for s in merged] == sorted(s.period for s in merged)
+        assert len(merged) == 2

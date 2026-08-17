@@ -294,6 +294,12 @@ def run_analysis(
 
     # 成分股拿不到就直接中止——不用過期名單產生看起來很新的報表。
     constituents = loader.load_constituents()
+
+    # 多年度歷史整批回補一次（以期別為單位，一次涵蓋全市場），
+    # 再逐檔組裝。回補失敗只記警告不中止：那會讓長期指標標示資料不足，
+    # 但最新一期的官方數字仍然可用。
+    loader.prefetch_history(today)
+
     loaded = loader.load_all(constituents)
 
     results = [

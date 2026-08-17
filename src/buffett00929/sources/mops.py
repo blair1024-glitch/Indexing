@@ -69,48 +69,68 @@ _TAG = re.compile(r"<[^>]+>")
 ID_COLUMN = "公司代號"
 NAME_COLUMN = "公司名稱"
 
-# 欄位對應。每個邏輯欄位給一組候選中文欄名——彙總報表的欄名隨業別而異
-# （例如金融業沒有「營業成本」），對不上的欄位保持 missing 並由 SchemaWatch 記錄。
+# 全形／半形正規化表。
+#
+# 實測（2026-08-17）確認 MOPS 一律用**全形括號**：「營業利益（損失）」。
+# 用半形括號寫候選名會一個都對不上——而且失敗方式很隱蔽：
+# 「營業收入」沒有括號所以照樣命中，於是看起來只有部分欄位缺料，
+# 像是業別差異而不是對應寫錯。因此比對前兩邊都先正規化，
+# 而不是把每個欄名的全形與半形版本都列一遍。
+_WIDTH = str.maketrans({"（": "(", "）": ")", "－": "-", "─": "-", "　": ""})
+
+
+def normalize_column(name: str) -> str:
+    return name.translate(_WIDTH).replace(" ", "")
+
+
+# 欄位對應。每個邏輯欄位給一組候選中文欄名——彙總報表分 6 種業別版面，
+# 欄名不一致（銀行業叫「資產總額」，一般業叫「資產總計」），
+# 對不上的欄位保持 missing 並由 SchemaWatch 記錄。
 INCOME_COLUMNS: dict[str, tuple[str, ...]] = {
-    "revenue": ("營業收入", "收入合計", "營業收入合計", "淨收益"),
-    "cost_of_revenue": ("營業成本", "營業成本合計"),
-    "gross_profit": ("營業毛利(毛損)", "營業毛利(毛損)淨額", "營業毛利"),
-    "operating_expenses": ("營業費用", "營業費用合計"),
+    # 銀行業沒有單一的「營業收入」（只有利息淨收益與利息以外淨損益），
+    # 這裡不硬湊——湊出來的營收會讓毛利率與淨利率全部失真。
+    "revenue": ("營業收入", "淨收益", "收益", "收入"),
+    "cost_of_revenue": ("營業成本", "支出及費用", "支出"),
+    # 「淨額」是加計未實現／已實現銷貨損益後的數字，與營收同基礎，優先採用。
+    "gross_profit": ("營業毛利(毛損)淨額", "營業毛利(毛損)", "營業毛利"),
+    "operating_expenses": ("營業費用",),
     "operating_income": ("營業利益(損失)", "營業利益", "營業損益"),
     "non_operating_income": ("營業外收入及支出", "營業外損益"),
-    "pretax_income": ("稅前淨利(淨損)", "繼續營業單位稅前淨利(淨損)", "稅前純益(純損)"),
-    "net_income": (
-        "本期淨利(淨損)",
-        "本期稅後淨利(淨損)",
-        "本期綜合損益總額",
+    "pretax_income": (
+        "稅前淨利(淨損)",
+        "繼續營業單位稅前淨利(淨損)",
+        "繼續營業單位稅前損益",
+        "繼續營業單位稅前純益(純損)",
     ),
-    "eps": ("基本每股盈餘(元)", "基本每股盈餘", "每股盈餘(元)"),
+    "net_income": ("本期淨利(淨損)", "本期稅後淨利(淨損)"),
+    "eps": ("基本每股盈餘(元)", "基本每股盈餘"),
 }
 
 # 稅後淨利優先取「歸屬於母公司業主」——ROE 的分子必須與分母（母公司權益）一致。
+# 兩種寫法都存在：一般業用「淨利（淨損）」，銀行業用「淨利（損）」。
 NET_INCOME_PARENT = (
     "淨利(淨損)歸屬於母公司業主",
-    "本期淨利(淨損)歸屬於母公司業主",
-    "綜合損益總額歸屬於母公司業主",
+    "淨利(損)歸屬於母公司業主",
 )
 
 BALANCE_COLUMNS: dict[str, tuple[str, ...]] = {
-    "total_assets": ("資產總額", "資產總計"),
-    "total_liabilities": ("負債總額", "負債總計"),
-    "total_equity": ("權益總額", "權益總計"),
+    "total_assets": ("資產總計", "資產總額"),
+    "total_liabilities": ("負債總計", "負債總額"),
+    "total_equity": ("權益總計", "權益總額"),
     "current_assets": ("流動資產",),
     "current_liabilities": ("流動負債",),
+    "cash": ("現金及約當現金",),
 }
 
-# 權益優先取「歸屬於母公司業主權益合計」，理由同上。
-EQUITY_PARENT = ("歸屬於母公司業主之權益合計", "歸屬於母公司業主權益合計", "權益總額")
+# 權益優先取歸屬於母公司業主的部分，理由同上。三種業別寫法都不一樣。
+EQUITY_PARENT = (
+    "歸屬於母公司業主之權益合計",
+    "歸屬於母公司業主權益合計",
+    "歸屬於母公司業主之權益",
+)
 
 CASHFLOW_COLUMNS: dict[str, tuple[str, ...]] = {
-    "operating_cash_flow": (
-        "營業活動之淨現金流入(流出)",
-        "營業活動之淨現金流入（流出）",
-        "營業活動之現金流量",
-    ),
+    "operating_cash_flow": ("營業活動之淨現金流入(流出)", "營業活動之現金流量"),
 }
 
 REPORTS = {
@@ -145,9 +165,11 @@ def scan_rows(html: str) -> Iterable[tuple[list[str], list[str]]]:
 
 
 def _column_index(header: list[str], candidates: Iterable[str]) -> int | None:
+    normalized = [normalize_column(name) for name in header]
     for name in candidates:
-        if name in header:
-            return header.index(name)
+        target = normalize_column(name)
+        if target in normalized:
+            return normalized.index(target)
     return None
 
 

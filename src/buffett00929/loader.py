@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import date
 from pathlib import Path
 
 from .config import Config
@@ -31,6 +32,7 @@ from .sources.base import FetchError, HttpClient, SourceUnavailable
 from .sources.cache import DiskCache
 from .sources.constituents import Constituent, ConstituentResolver, ConstituentSet
 from .sources.finmind import FinMindClient
+from .sources.mops import MopsClient, MopsHistory
 from .sources.tpex import make_tpex_client
 from .sources.twse import TwseClient
 
@@ -53,6 +55,9 @@ class DataLoader:
     twse: TwseClient = field(init=False)
     tpex: TwseClient = field(init=False)
     finmind: FinMindClient = field(init=False)
+    mops: MopsClient = field(init=False)
+    history: MopsHistory | None = field(default=None, init=False)
+    """MOPS 全市場歷史索引。整批抓一次，所有公司共用。"""
     warnings: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
@@ -74,6 +79,22 @@ class DataLoader:
         self.twse = TwseClient(http=self.http, config=sources.get("twse") or {})
         self.tpex = make_tpex_client(self.http, sources.get("tpex") or {})
         self.finmind = FinMindClient(http=self.http, config=sources.get("finmind") or {})
+
+        # MOPS 的回應是 1.5 MB 的 HTML，而且要連打近百次回補十年，
+        # 因此給它獨立的 client：較長的逾時與自己的節流間隔，
+        # 不影響 OpenAPI 那些小而快的請求。
+        mops_cfg = sources.get("mops") or {}
+        self.mops = MopsClient(
+            http=HttpClient(
+                timeout=float(mops_cfg.get("timeout_seconds", 90)),
+                max_retries=int(http_cfg.get("max_retries", 3)),
+                backoff=tuple(http_cfg.get("backoff_seconds", (2, 4, 8))),
+                user_agent=str(http_cfg.get("user_agent", "buffett00929/0.1")),
+                cache=cache,
+                min_interval_seconds=float(mops_cfg.get("min_interval_seconds", 1.0)),
+            ),
+            config=mops_cfg,
+        )
 
     # ------------------------------------------------------------------
     # 成分股
@@ -99,21 +120,38 @@ class DataLoader:
             etf_weight=constituent.weight,
         )
 
-        # --- 1. 歷史（FinMind），取得季度序列 ---------------------------------
+        # --- 1. 多年度歷史（MOPS 彙總報表，官方）------------------------------
+        from_mops = self._load_from_mops(company)
+
+        # --- 2. FinMind 補 MOPS 沒有的欄位 ------------------------------------
+        # 彙總報表沒有資本支出、股利、月營收與本益比序列。
+        # 有 token 時由 FinMind 補；**只填空缺，不覆蓋官方數字**（規格第十九節）。
         if self.finmind.is_available:
-            self._load_history(company)
-        else:
+            self._load_history(company, fill_only=from_mops)
+        elif not from_mops:
             company.note_gap(
                 f"多年度歷史未載入：{self.finmind.unavailable_reason}"
                 "（CAGR、5/10 年平均 ROE、毛利率趨勢、歷史本益比分位將標示資料不足）"
             )
+        else:
+            company.note_gap(
+                "資本支出、股利與歷史本益比未載入："
+                f"{self.finmind.unavailable_reason}"
+                "（FCF、盈再率、殖利率與歷史本益比分位將標示資料不足）"
+            )
 
-        # --- 2. 官方最新一期覆蓋同期 FinMind 值（規格第十九節：官方優先）--------
+        # --- 3. 官方最新一期覆蓋同期資料（規格第十九節：官方優先）--------------
         # 必須在年度彙總之前做，否則官方數字不會進到最終結果。
         self._overlay_official(company)
 
-        # --- 3. 期別正規化（累計 → 單季 → 年度）-------------------------------
-        detection = detect_cumulative(company.income_statements)
+        # --- 4. 期別正規化（累計 → 單季 → 年度）-------------------------------
+        # 台灣財報一律累計揭露。MOPS 的年度數（season 04）本身就是年度，
+        # 直接以年度期別存放，不會被誤當成單季。
+        detection = (
+            CumulativeDetection(True, "high", "台灣官方財報為累計揭露（MOPS 彙總報表）")
+            if from_mops
+            else detect_cumulative(company.income_statements)
+        )
         quarterly_incomes = to_single_quarter(company.income_statements, detection)
         company.income_statements = to_annual_incomes(company.income_statements, detection)
         company.balance_sheets = to_annual_balances(company.balance_sheets)
@@ -125,16 +163,64 @@ class DataLoader:
             quarterly_incomes=quarterly_incomes,
         )
 
-    def _load_history(self, company: Company) -> None:
+    def _load_from_mops(self, company: Company) -> bool:
+        """從已回補的 MOPS 索引取出這家公司的歷史。回傳是否真的取到資料。"""
+        if self.history is None:
+            return False
+
+        incomes = self.history.income_statements(company.stock_id)
+        balances = self.history.balance_sheets(company.stock_id)
+        flows = self.history.cash_flow_statements(company.stock_id)
+
+        if not (incomes or balances or flows):
+            company.note_gap(
+                "MOPS 彙總報表查無此公司代號"
+                "（可能為興櫃或公開發行公司，未涵蓋於上市櫃彙總表）"
+            )
+            return False
+
+        company.income_statements = list(incomes)
+        company.balance_sheets = list(balances)
+        company.cash_flows = list(flows)
+        return True
+
+    def _load_history(self, company: Company, *, fill_only: bool = False) -> None:
+        """由 FinMind 載入歷史。
+
+        ``fill_only=True`` 時只補 MOPS 沒給的欄位，不覆蓋既有的官方數字——
+        規格第十九節的官方優先指的是同一欄位誰說了算，
+        FinMind 的角色是補上彙總報表沒有的細項（資本支出、股利、月營收）。
+        """
         stock_id = company.stock_id
-        loaders = (
+        statements = (
             ("綜合損益表", lambda: self.finmind.income_statements(stock_id), "income_statements"),
             ("資產負債表", lambda: self.finmind.balance_sheets(stock_id), "balance_sheets"),
             ("現金流量表", lambda: self.finmind.cash_flows(stock_id), "cash_flows"),
+        )
+        for label, fetch, attribute in statements:
+            try:
+                fetched = fetch()
+            except (SourceUnavailable, FetchError) as exc:
+                company.note_gap(f"{label}歷史未載入：{exc}")
+                continue
+
+            if attribute == "cash_flows" and fetched:
+                # 現金流量表同為累計揭露，先換算單季才能與 MOPS 的期別對齊。
+                fetched = cash_flow_to_single_quarter(fetched, is_cumulative=True)
+
+            if not fill_only:
+                setattr(company, attribute, fetched)
+                continue
+            existing = getattr(company, attribute)
+            for statement in fetched:
+                _merge_statement(existing, statement, company, label, overwrite=False)
+
+        # 以下三項彙總報表都沒有，無論如何都是整批取用。
+        extras = (
             ("股利", lambda: self.finmind.dividends(stock_id), "dividends"),
             ("月營收", lambda: self.finmind.monthly_revenues(stock_id), "monthly_revenues"),
         )
-        for label, fetch, attribute in loaders:
+        for label, fetch, attribute in extras:
             try:
                 setattr(company, attribute, fetch())
             except (SourceUnavailable, FetchError) as exc:
@@ -144,10 +230,6 @@ class DataLoader:
             company.market_data.pe_history = self.finmind.pe_history(stock_id)
         except (SourceUnavailable, FetchError) as exc:
             company.note_gap(f"歷史本益比未載入：{exc}（合理本益比將改用設定值上下限）")
-
-        # 現金流量表同為累計揭露，先換算單季再彙總年度。
-        if company.cash_flows:
-            company.cash_flows = cash_flow_to_single_quarter(company.cash_flows, is_cumulative=True)
 
     def _overlay_official(self, company: Company) -> None:
         """以官方最新一期覆蓋 FinMind 同期資料（規格第十九節：官方優先）。"""
@@ -248,6 +330,31 @@ class DataLoader:
                 constituent.market = "TWSE" if constituent.stock_id in listed else "TPEx"
         return industries
 
+    def prefetch_history(self, today: date | None = None) -> None:
+        """整批回補 MOPS 歷史，供所有公司共用。
+
+        必須在 ``load_all`` 之前呼叫一次。以期別為單位抓取，
+        一次請求涵蓋全市場——這是唯一撐得住的量級（見 ``sources/mops.py``）。
+        """
+        if not self.mops.is_available:
+            self.warnings.append("MOPS 歷史來源已停用，多年度指標將依賴 FinMind")
+            return
+
+        try:
+            self.history = self.mops.backfill(today)
+        except (SourceUnavailable, FetchError) as exc:
+            self.warnings.append(
+                f"MOPS 歷史回補失敗：{exc}（多年度指標將標示資料不足）"
+            )
+            return
+
+        self.warnings.extend(self.mops.warnings)
+        if self.mops.schema_watch.has_issues:
+            self.warnings.append(
+                f"MOPS 彙總報表有 {len(self.mops.schema_watch.unknown_fields)} 個欄位對不上；"
+                "部分為業別差異（金融業沒有營業成本），詳見報表的資料來源說明"
+            )
+
     def load_all(self, constituents: ConstituentSet) -> list[LoadedCompany]:
         industries = self.classify(constituents)
 
@@ -286,31 +393,43 @@ class DataLoader:
         return loaded
 
 
-def _merge_official(statements: list, official, company: Company, label: str) -> None:
-    """把官方最新一期併入既有序列。
+def _merge_statement(
+    statements: list, incoming, company: Company, label: str, *, overwrite: bool
+) -> list[str]:
+    """把一筆報表逐欄位併入既有序列，回傳實際寫入的欄位名。
 
-    逐欄位合併而非整筆替換：官方值優先，但官方沒給的欄位保留 FinMind 的值。
-    整筆替換會讓官方端點缺的欄位（例如研發費用）平白消失，
-    反而讓資料變少——官方優先指的是同一欄位誰說了算，不是誰整筆覆蓋誰。
+    逐欄位而非整筆替換：整筆替換會讓來源缺的欄位平白消失，反而讓資料變少。
+    優先序指的是**同一欄位**誰說了算，不是誰整筆覆蓋誰。
+
+    ``overwrite=True``：來源優先，有值就蓋過去（官方最新一期用）。
+    ``overwrite=False``：只填空缺，不動既有值（FinMind 補 MOPS 的細項用）。
     """
-    if official is None:
-        return
+    if incoming is None:
+        return []
 
-    existing = next((s for s in statements if s.period == official.period), None)
+    existing = next((s for s in statements if s.period == incoming.period), None)
     if existing is None:
-        statements.append(official)
+        statements.append(incoming)
         statements.sort(key=lambda s: s.period)
-        return
+        return ["（整期新增）"]
 
-    replaced: list[str] = []
-    for field_name, official_value in vars(official).items():
-        if field_name == "period" or not hasattr(official_value, "is_available"):
+    written: list[str] = []
+    for field_name, value in vars(incoming).items():
+        if field_name == "period" or not hasattr(value, "is_available"):
             continue
-        if official_value.is_available:
-            setattr(existing, field_name, official_value)
-            replaced.append(field_name)
+        if not value.is_available:
+            continue
+        if not overwrite and getattr(existing, field_name).is_available:
+            continue
+        setattr(existing, field_name, value)
+        written.append(field_name)
+    return written
 
-    if replaced:
+
+def _merge_official(statements: list, official, company: Company, label: str) -> None:
+    """把官方最新一期併入既有序列（官方優先，逐欄位覆蓋）。"""
+    replaced = _merge_statement(statements, official, company, label, overwrite=True)
+    if replaced and replaced != ["（整期新增）"]:
         company.note_gap(
             f"{label} {official.period} 已以官方數字覆蓋 {len(replaced)} 個欄位（官方優先）"
         )

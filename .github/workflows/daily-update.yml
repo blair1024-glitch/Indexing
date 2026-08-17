@@ -37,6 +37,19 @@ jobs:
       - name: 安裝相依套件
         run: python -m pip install --quiet -e ".[dev]"
 
+      # 十年份的 MOPS 彙總報表約 110 MB，太大不適合進版控，
+      # 但每天重抓近百次 1.5 MB 的頁面既慢又對來源端不禮貌。
+      # 已定案的期別在快取層是永久有效的（見 sources/cache.py），
+      # 所以還原快取後只會抓新增的期別。
+      # key 帶上季度，讓快取每季自然換一份，不會無限增長。
+      - name: 還原財報歷史快取
+        uses: actions/cache@v4
+        with:
+          path: data/raw
+          key: mops-history-${{ github.run_id }}
+          restore-keys: |
+            mops-history-
+
       - name: 驗證設定與指標實作一致
         run: make check
 
