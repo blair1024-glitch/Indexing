@@ -206,37 +206,59 @@ class DataLoader:
     # 批次
     # ------------------------------------------------------------------
 
-    def classify_markets(self, constituents: ConstituentSet) -> None:
-        """判定每檔成分股屬於上市（TWSE）或上櫃（TPEx）。
+    def classify(self, constituents: ConstituentSet) -> dict[str, str]:
+        """判定每檔成分股的市場別，並回傳產業別對照表。
 
-        持股 API 只給代號與名稱，沒有市場別，但財報端點分屬兩個交易所，
-        搞錯就整批抓不到資料。以證交所的每日收盤行情清單為準：
-        在清單內即為上市，否則歸為上櫃。
+        持股 API 只給代號、名稱與權重——沒有市場別也沒有產業別。
+        市場別非知道不可：財報端點分屬證交所與櫃買中心，選錯就整批抓不到。
 
-        清單抓不到時保持預設（TWSE）並記錄警告——猜錯市場別會導致缺料，
-        缺料會被正確標示，不會變成錯誤數字。
+        優先用 FinMind 的股票總覽（同時給市場別與產業別）；
+        沒有 token 時退回「有沒有出現在證交所收盤行情清單裡」來判斷市場別，
+        產業別則留白（報表顯示「未分類」，不會編一個出來）。
         """
+        industries: dict[str, str] = {}
+
+        if self.finmind.is_available:
+            try:
+                directory = self.finmind.stock_directory()
+            except (SourceUnavailable, FetchError) as exc:
+                self.warnings.append(f"FinMind 股票總覽未載入，改用證交所清單判定市場別：{exc}")
+            else:
+                for constituent in constituents.constituents:
+                    entry = directory.get(constituent.stock_id)
+                    if not entry:
+                        continue
+                    if entry["market"]:
+                        constituent.market = "TPEx" if "tpex" in entry["market"].lower() else "TWSE"
+                    if entry["industry"]:
+                        industries[constituent.stock_id] = entry["industry"]
+                if industries:
+                    return industries
+
         try:
             listed = self.twse._fetch_indexed("daily_price", id_fields=("Code", "公司代號"))
         except SourceUnavailable as exc:
             self.warnings.append(
                 f"無法取得上市股票清單，成分股市場別一律以上市處理：{exc}"
             )
-            return
+            return industries
 
-        if not listed:
-            return
-
-        for constituent in constituents.constituents:
-            constituent.market = "TWSE" if constituent.stock_id in listed else "TPEx"
+        if listed:
+            for constituent in constituents.constituents:
+                constituent.market = "TWSE" if constituent.stock_id in listed else "TPEx"
+        return industries
 
     def load_all(self, constituents: ConstituentSet) -> list[LoadedCompany]:
-        self.classify_markets(constituents)
+        industries = self.classify(constituents)
 
         loaded: list[LoadedCompany] = []
         for constituent in constituents.constituents:
             try:
-                loaded.append(self.load_company(constituent))
+                item = self.load_company(constituent)
+                industry = industries.get(constituent.stock_id)
+                if industry:
+                    item.company.industry = industry
+                loaded.append(item)
             except Exception as exc:  # noqa: BLE001 - 單一公司失敗不應中斷整批
                 self.warnings.append(
                     f"{constituent.stock_id} {constituent.name} 載入失敗：{exc}"

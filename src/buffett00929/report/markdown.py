@@ -14,16 +14,28 @@ from . import format as fmt
 
 
 def write_reports(run: AnalysisRun, repo_root: Path) -> list[Path]:
-    """產生總覽與逐檔報告。"""
+    """產生總覽與逐檔報告，並清掉已不在名單中的舊報告。
+
+    清理是必要的：成分股被剔除後，它的報告若留在原地，
+    看起來就像是最新分析的一部分——日期還是舊的，但讀者不會注意到。
+    ETF 換股後留下一份「已不是成分股」的報告，比沒有報告更誤導。
+    """
     reports_dir = repo_root / "reports"
     reports_dir.mkdir(parents=True, exist_ok=True)
     companies_dir = reports_dir / "companies"
     companies_dir.mkdir(parents=True, exist_ok=True)
 
     written = [_write(reports_dir / "README.md", render_summary(run))]
+    current_ids = set()
     for result in run.results:
+        current_ids.add(result.company.stock_id)
         path = companies_dir / f"{result.company.stock_id}.md"
         written.append(_write(path, render_company(result, run)))
+
+    for stale in companies_dir.glob("*.md"):
+        if stale.stem not in current_ids:
+            stale.unlink()
+
     return written
 
 

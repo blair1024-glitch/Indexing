@@ -182,3 +182,27 @@ class TestCli:
         assert "無法取得成分股名單" in capsys.readouterr().err
         assert not (tmp_path / "docs").exists()
         assert not (tmp_path / "data" / "snapshots").exists()
+
+
+class TestStaleReportCleanup:
+    """成分股被剔除後，它的舊報告必須消失。
+
+    留著會很危險：那份報告看起來仍是最新分析的一部分，
+    但那家公司其實已經不在 ETF 裡了。
+    """
+
+    def test_removes_reports_for_dropped_constituents(self, run, tmp_path):
+        companies_dir = tmp_path / "reports" / "companies"
+        companies_dir.mkdir(parents=True)
+        stale = companies_dir / "1111.md"
+        stale.write_text("# 已被剔除的成分股\n", encoding="utf-8")
+
+        markdown.write_reports(run, tmp_path)
+
+        assert not stale.exists()
+        for result in run.results:
+            assert (companies_dir / f"{result.company.stock_id}.md").exists()
+
+    def test_keeps_the_summary_readme(self, run, tmp_path):
+        markdown.write_reports(run, tmp_path)
+        assert (tmp_path / "reports" / "README.md").exists()
