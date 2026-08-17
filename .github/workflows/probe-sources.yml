@@ -6,6 +6,12 @@ name: Probe constituent sources
 # 開發環境連不上台股任何來源，這個 workflow 是唯一能取得真實回應的途徑。
 on:
   workflow_dispatch:
+    inputs:
+      target:
+        description: 要探測哪個來源
+        type: choice
+        options: [mops, constituents, all]
+        default: mops
 
 jobs:
   probe:
@@ -26,5 +32,10 @@ jobs:
         run: |
           python -m pip install --quiet requests
 
-      - name: 執行探測
+      - name: 探測成分股來源
+        if: inputs.target == 'constituents' || inputs.target == 'all'
         run: python scripts/probe_constituent_sources.py
+
+      - name: 探測 MOPS 歷史財報
+        if: inputs.target == 'mops' || inputs.target == 'all'
+        run: python scripts/probe_mops.py
