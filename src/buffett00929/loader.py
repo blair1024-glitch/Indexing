@@ -21,7 +21,6 @@ from .config import Config
 from .models import Company, MarketData
 from .normalize import (
     CumulativeDetection,
-    cash_flow_to_single_quarter,
     detect_cumulative,
     to_annual_balances,
     to_annual_cash_flows,
@@ -190,6 +189,15 @@ class DataLoader:
         ``fill_only=True`` 時只補 MOPS 沒給的欄位，不覆蓋既有的官方數字——
         規格第十九節的官方優先指的是同一欄位誰說了算，
         FinMind 的角色是補上彙總報表沒有的細項（資本支出、股利、月營收）。
+
+        合併前必須先把 FinMind 的季度序列**彙總成年度**，否則資本支出會被靜默丟棄：
+        MOPS 的歷史是年度期別（來自 season 04），FinMind 是 Q1–Q4，
+        兩者以期別配對永遠對不上，季度資料只會被 append；
+        接著 ``to_annual_cash_flows`` 看到該年度已有年度數就整組跳過
+        （見 ``normalize.py``），資本支出就此消失，而且不會有任何錯誤訊息。
+
+        因此年度與季度**兩個層級都合併**：年度的補進 MOPS 的年度報表，
+        季度的與 MOPS 近兩年的 Q1–Q3 對齊。兩者都是只填空缺。
         """
         stock_id = company.stock_id
         statements = (
@@ -204,15 +212,12 @@ class DataLoader:
                 company.note_gap(f"{label}歷史未載入：{exc}")
                 continue
 
-            if attribute == "cash_flows" and fetched:
-                # 現金流量表同為累計揭露，先換算單季才能與 MOPS 的期別對齊。
-                fetched = cash_flow_to_single_quarter(fetched, is_cumulative=True)
-
             if not fill_only:
                 setattr(company, attribute, fetched)
                 continue
+
             existing = getattr(company, attribute)
-            for statement in fetched:
+            for statement in list(fetched) + _annualise(attribute, fetched):
                 _merge_statement(existing, statement, company, label, overwrite=False)
 
         # 以下三項彙總報表都沒有，無論如何都是整批取用。
@@ -391,6 +396,26 @@ class DataLoader:
                     "執行 `buffett00929 verify-sources` 可列出完整名稱"
                 )
         return loaded
+
+
+_CUMULATIVE = CumulativeDetection(True, "high", "台灣財報為累計揭露")
+
+
+def _annualise(attribute: str, statements: list) -> list:
+    """把季度序列彙總成年度期別，供與 MOPS 的年度報表對齊。
+
+    直接沿用 ``normalize`` 既有的彙總規則，包含它拒絕用不完整年度冒充全年的行為
+    （缺 Q4 就不產生該年度數）。台灣財報一律累計揭露，故不做偵測。
+    """
+    if not statements:
+        return []
+    if attribute == "income_statements":
+        return to_annual_incomes(statements, _CUMULATIVE)
+    if attribute == "balance_sheets":
+        return to_annual_balances(statements)
+    if attribute == "cash_flows":
+        return to_annual_cash_flows(statements, True)
+    return []
 
 
 def _merge_statement(
