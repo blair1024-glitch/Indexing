@@ -1,0 +1,105 @@
+# 資料來源設定（對應規格第十九節：優先官方來源）
+#
+# 優先序：官方（TWSE / TPEx / MOPS）> FinMind（歷史回補）。
+# 每個數據點都會記錄實際命中的來源，報表上原樣顯示。
+
+# ---------------------------------------------------------------------------
+# 成分股名單來源（依序嘗試，全部失敗則中止，不使用過期資料）
+# ---------------------------------------------------------------------------
+constituents:
+  etf_id: "00929"
+  etf_name: "復華台灣科技優息 ETF"
+  # 不寫死成分股檔數：以抓取結果為準（公開資料對 40/50 檔說法不一）。
+  providers:
+    - name: twse_pcf
+      enabled: true
+      description: 證交所 ETF 申購買回清單（PCF），官方每日揭露的實際持股籃
+      url: "https://www.twse.com.tw/rwd/zh/ETF/etfPCF"
+      params: {stkNo: "00929", response: json}
+    - name: fuhwa_official
+      enabled: true
+      description: 復華投信官網 00929 頁面
+      url: "https://www.fhtrust.com.tw/ETF/etf_detail/ETF21"
+    - name: manual
+      enabled: true
+      description: 人工維護的名單，需填 as_of 日期；僅在官方來源皆失敗時使用
+      path: "data/manual/constituents.yaml"
+  # 人工名單超過此天數即視為過期並拒絕使用（規格第二節：禁用過時資料）
+  manual_max_age_days: 45
+
+# ---------------------------------------------------------------------------
+# 證交所 OpenAPI（上市）
+# ---------------------------------------------------------------------------
+# 注意：實測確認 TWSE OpenAPI 各端點**只回傳最新一期**，不提供歷史查詢。
+# 因此它負責「最新一期官方權威值」，多年度歷史由 FinMind 回補。
+twse:
+  enabled: true
+  base_url: "https://openapi.twse.com.tw/v1"
+  endpoints:
+    monthly_revenue: "/opendata/t187ap05_L"
+    income_statement: "/opendata/t187ap06_L_ci"
+    balance_sheet: "/opendata/t187ap07_L_ci"
+    operating_analysis: "/opendata/t187ap17_L"
+    valuation: "/exchangeReport/BWIBBU_ALL"
+    daily_price: "/exchangeReport/STOCK_DAY_ALL"
+  # 產業別對應不同報表格式；一般業以外的公司需切換端點。
+  industry_variants:
+    general: "_ci"
+    bank: "_bd"
+    financial_holding: "_fh"
+    insurance: "_ins"
+    securities: "_mim"
+  # 財報數字單位：TWSE opendata 為新台幣仟元，載入時乘以 1000 轉為元。
+  amount_multiplier: 1000
+
+# ---------------------------------------------------------------------------
+# 櫃買中心 OpenAPI（上櫃）
+# ---------------------------------------------------------------------------
+# 00929 追蹤「上市櫃」科技優息指數，成分股包含上櫃公司，故需此來源。
+tpex:
+  enabled: true
+  base_url: "https://www.tpex.org.tw/openapi/v1"
+  endpoints:
+    monthly_revenue: "/mopsfin_t187ap05_O"
+    income_statement: "/mopsfin_t187ap06_O_ci"
+    balance_sheet: "/mopsfin_t187ap07_O_ci"
+    daily_price: "/tpex_mainboard_daily_close_quotes"
+  amount_multiplier: 1000
+
+# ---------------------------------------------------------------------------
+# FinMind（歷史回補）
+# ---------------------------------------------------------------------------
+# 免費 token 於 https://finmindtrade.com 註冊後取得，設為環境變數 FINMIND_TOKEN。
+# 未設定時系統仍可執行，但所有需要多年歷史的指標（CAGR、5/10 年平均 ROE、
+# 毛利率趨勢、歷史 PE 分位）會標示「資料不足」而非給 0 分。
+finmind:
+  enabled: true
+  base_url: "https://api.finmindtrade.com/api/v4/data"
+  token_env: "FINMIND_TOKEN"
+  history_years: 10
+  datasets:
+    stock_info: "TaiwanStockInfo"
+    price: "TaiwanStockPrice"
+    per: "TaiwanStockPER"
+    income_statement: "TaiwanStockFinancialStatements"
+    balance_sheet: "TaiwanStockBalanceSheet"
+    cash_flow: "TaiwanStockCashFlowsStatement"
+    monthly_revenue: "TaiwanStockMonthRevenue"
+    dividend: "TaiwanStockDividend"
+  # 免費方案有速率限制，請求之間的間隔秒數
+  request_interval_seconds: 0.6
+
+# ---------------------------------------------------------------------------
+# HTTP 與快取
+# ---------------------------------------------------------------------------
+http:
+  timeout_seconds: 30
+  max_retries: 3
+  backoff_seconds: [2, 4, 8]
+  user_agent: "buffett00929/0.1 (+https://github.com/blair1024-glitch/Indexing)"
+
+cache:
+  dir: "data/raw"
+  # 當日資料快取有效期。財報事件監控每日執行，故預設 12 小時。
+  ttl_hours: 12
+  enabled: true

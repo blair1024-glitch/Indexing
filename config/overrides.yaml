@@ -1,0 +1,43 @@
+# 人工覆寫｜Management 與 Moat 的質化判斷
+#
+# 系統預設用可稽核的量化代理指標計算 Management(20) 與 Moat(25)。
+# 但品牌、客戶黏著度、網路效應、經營者誠信這些面向，財報數字只能近似。
+# 這個檔案讓你把自己的研究結論寫進評分，並且**留下理由與日期**。
+#
+# 規則：
+#   1. 每筆覆寫都必須填 points、rationale、reviewed_on。缺任一項會被拒絕並報錯。
+#   2. 報表會標示「人工調整」、原始計算值、你的理由與覆寫日期。
+#   3. 超過 review_max_age_days 未更新的覆寫會在報表上標示「覆寫已過期」，
+#      提醒你重新檢視——避免兩年前的判斷繼續影響今天的評分。
+#   4. points 不得超過該 criterion 在 scoring.yaml 的 max_points。
+#
+# criterion 名稱請對照 config/scoring.yaml 的 management.criteria 與 moat.criteria，
+# 另可使用 `qualitative_bonus` 對整個 M1/M2 額外加減分（見範例）。
+
+review_max_age_days: 365
+
+overrides:
+  # ------------------------------------------------------------------
+  # 範例（已註解）。取消註解並改成你自己的研究結論即可生效。
+  # ------------------------------------------------------------------
+  #
+  # "2330":
+  #   moat:
+  #     scale:
+  #       points: 3
+  #       rationale: >
+  #         先進製程市佔超過九成，客戶轉換成本極高，屬於規格 M2 第③⑤項
+  #         （成本優勢＋客戶黏著度）的教科書案例，量化代理的營收規模帶低估了實際地位。
+  #       reviewed_on: 2026-08-17
+  #   management:
+  #     reinvestment_return:
+  #       points: 5
+  #       rationale: 資本支出雖高，但每一輪製程投資都轉化為市佔與毛利提升。
+  #       reviewed_on: 2026-08-17
+  #
+  # "2454":
+  #   moat:
+  #     qualitative_bonus:
+  #       points: 2
+  #       rationale: 手機 SoC 平台的軟體生態與客戶設計綁定，量化指標未反映。
+  #       reviewed_on: 2026-08-17

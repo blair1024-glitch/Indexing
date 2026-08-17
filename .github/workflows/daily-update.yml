@@ -1,0 +1,95 @@
+name: Daily 00929 update
+
+# 規格第十三節：每天檢查成分股是否公布月營收／季報／年報／重大訊息。
+#
+# 台股月營收於每月 10 日前公布、季報於各季結束後 45 天內公布，
+# 都在台灣時間白天。此處排在台灣時間 18:30（UTC 10:30），
+# 讓當日公布的資料都已進入證交所的 OpenAPI。
+on:
+  schedule:
+    - cron: "30 10 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: 手動執行的原因（會記錄在 commit 訊息）
+        required: false
+        default: 手動觸發
+
+concurrency:
+  # 同時只跑一個更新，避免兩次執行同時寫快照造成 commit 衝突。
+  group: daily-update
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: 安裝相依套件
+        run: python -m pip install --quiet -e ".[dev]"
+
+      - name: 驗證設定與指標實作一致
+        run: make check
+
+      - name: 執行測試
+        run: make test
+
+      - name: 更新分析
+        id: update
+        env:
+          FINMIND_TOKEN: ${{ secrets.FINMIND_TOKEN }}
+        run: |
+          set -o pipefail
+          make update 2>&1 | tee update.log
+
+      - name: Commit 結果
+        run: |
+          set -euo pipefail
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/snapshots docs reports
+
+          if git diff --cached --quiet; then
+            echo "本次執行沒有任何變化，不建立 commit。"
+            exit 0
+          fi
+
+          # 把當日的評分變化寫進 commit 訊息，git log 本身就是變化歷史。
+          {
+            echo "chore: 00929 每日更新 $(date -u +%Y-%m-%d)"
+            echo
+            if grep -q "評分變化" update.log; then
+              sed -n '/📈 評分變化/,/^$/p' update.log | tail -n +2
+            fi
+            if grep -q "🚨 紅旗" update.log; then
+              sed -n '/🚨 紅旗/,/^$/p' update.log | tail -n +2
+            fi
+          } > commit-message.txt
+
+          git commit -F commit-message.txt
+          git push
+
+      - name: 保留執行紀錄
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: update-log
+          path: update.log
+          retention-days: 14
+
+      - name: 失敗時說明
+        if: failure()
+        run: |
+          echo "::warning::更新失敗。常見原因："
+          echo "::warning::1. 成分股名單來源無法連線 —— 系統會中止而不使用過期名單，這是預期行為"
+          echo "::warning::2. FINMIND_TOKEN 未設定或額度用盡 —— 長期指標會標示資料不足"
+          echo "::warning::3. 資料來源 schema 變動 —— 執行 make verify 可列出實際欄位名稱"

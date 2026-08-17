@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+
+# Cached raw API responses are reproducible; snapshots and reports are committed.
+data/raw/
+!data/raw/.gitkeep
