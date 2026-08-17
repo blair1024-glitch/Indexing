@@ -84,9 +84,32 @@ class TestOrdering:
 
     def test_annual_sorts_after_the_third_quarter_of_the_same_year(self):
         periods = periods_to_fetch(date(2026, 8, 17), years=3)
-        year = 2023
-        same_year = [p for p in periods if p.year == year]
-        assert same_year[-1] == FiscalPeriod(year, 0)
+        same_year = [p for p in periods if p.year == 2025]
+        assert same_year == [
+            FiscalPeriod(2025, 1),
+            FiscalPeriod(2025, 2),
+            FiscalPeriod(2025, 3),
+            FiscalPeriod(2025, 0),
+        ]
+
+
+class TestRequestBudget:
+    """請求數直接決定會不會被擋，所以取捨要被測試釘住。"""
+
+    def test_old_years_contribute_only_annual_figures(self):
+        periods = periods_to_fetch(date(2026, 8, 17), years=10, quarterly_years=2)
+        old = [p for p in periods if p.year == 2018]
+        assert old == [FiscalPeriod(2018, 0)]
+
+    def test_recent_years_keep_their_quarters(self):
+        periods = periods_to_fetch(date(2026, 8, 17), years=10, quarterly_years=2)
+        assert FiscalPeriod(2025, 2) in periods
+        assert FiscalPeriod(2026, 2) in periods
+
+    def test_a_decade_stays_within_a_sane_request_budget(self):
+        """三張表 × 兩個市場 × 期別數。超過幾百次就該重新設計，不是調參數。"""
+        periods = periods_to_fetch(date(2026, 8, 17), years=10, quarterly_years=2)
+        assert len(periods) * 3 * 2 < 150
 
 
 class TestCacheTtl:

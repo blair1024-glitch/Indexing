@@ -27,8 +27,9 @@ jobs:
         with:
           python-version: "3.11"
 
+      # MOPS 探測直接跑正式解析器，所以要把套件裝起來。
       - name: 安裝探測相依套件
-        run: python -m pip install --quiet requests playwright
+        run: python -m pip install --quiet -e "." playwright
 
       # 只有需要側錄瀏覽器流量的探測才裝 chromium（裝一次約一分鐘）。
       - name: 安裝 chromium

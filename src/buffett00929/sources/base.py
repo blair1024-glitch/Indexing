@@ -104,6 +104,67 @@ class HttpClient:
             immutable=immutable,
         )
 
+    def post_form(
+        self,
+        url: str,
+        data: dict[str, str],
+        headers: dict | None = None,
+        *,
+        use_cache: bool = True,
+        namespace: str | None = None,
+        immutable: bool = False,
+        encoding: str = "utf-8",
+    ) -> str:
+        """送出 form-encoded POST 並回傳 HTML 文字。
+
+        公開資訊觀測站的彙總報表是舊式表單查詢，回應為 HTML 而非 JSON。
+        編碼一律指定而不交給 requests 猜：MOPS 沒有在標頭宣告 charset 時，
+        猜錯會讓整頁中文變成亂碼，然後解析器會「找不到欄位」——
+        那是最難查的一種失敗，因為它看起來像版面改版。
+        """
+        cache_key = {"_method": "POST_FORM", **data}
+        if use_cache and self.cache:
+            entry = self.cache.get(url, cache_key, namespace=namespace, immutable=immutable)
+            if entry is not None:
+                return str(entry.payload)
+
+        last_error: Exception | None = None
+        for attempt in range(self.max_retries):
+            self._throttle()
+            try:
+                response = self.session.post(
+                    url,
+                    data=data,
+                    headers={
+                        "Content-Type": "application/x-www-form-urlencoded",
+                        **(headers or {}),
+                    },
+                    timeout=self.timeout,
+                )
+            except requests.RequestException as exc:
+                last_error = exc
+            else:
+                if response.status_code == 200:
+                    response.encoding = encoding
+                    text = response.text
+                    if self.cache:
+                        self.cache.set(
+                            url, cache_key, text, namespace=namespace, immutable=immutable
+                        )
+                    return text
+
+                if 400 <= response.status_code < 500 and response.status_code != 429:
+                    raise FetchError(
+                        f"{url} 回傳 HTTP {response.status_code}"
+                        f"（不重試：用戶端錯誤）{response.text[:200]}"
+                    )
+                last_error = FetchError(f"{url} 回傳 HTTP {response.status_code}")
+
+            if attempt < self.max_retries - 1:
+                time.sleep(self.backoff[min(attempt, len(self.backoff) - 1)])
+
+        raise FetchError(f"{url} 重試 {self.max_retries} 次後仍失敗：{last_error}")
+
     def _request_json(
         self,
         method: str,

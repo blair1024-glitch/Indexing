@@ -63,23 +63,31 @@ def is_settled(
     return months > settle_months
 
 
+DEFAULT_QUARTERLY_YEARS = 2
+
+
 def periods_to_fetch(
     today: date,
     years: int = 10,
-    *,
-    include_annual: bool = True,
+    quarterly_years: int = DEFAULT_QUARTERLY_YEARS,
 ) -> list[FiscalPeriod]:
     """列出應該抓取的期別，由舊到新。
 
-    只包含申報期限已過的期別。回傳順序由舊到新，
-    讓回補過程即使中途被擋，已取得的部分仍是連續的歷史。
+    **年度數抓滿 ``years`` 年，季度數只抓最近 ``quarterly_years`` 年。**
+    十年的 ROE、CAGR 與獲利穩定度都是年度指標，用不到十年前的單季數；
+    近幾季則要留著做 QoQ/YoY 與財報事件追蹤。這個取捨把請求數從
+    每年 4 期壓到「10 個年度 + 6 個季度」，直接反映在被擋的風險上。
+
+    只包含申報期限已過的期別（見 ``is_published``）。順序由舊到新，
+    讓回補即使中途中斷，已取得的部分仍是連續的歷史。
     """
     periods: list[FiscalPeriod] = []
     for year in range(today.year - years, today.year + 1):
-        if include_annual:
-            annual = FiscalPeriod(year, 0)
-            if is_published(annual, today):
-                periods.append(annual)
+        annual = FiscalPeriod(year, 0)
+        if is_published(annual, today):
+            periods.append(annual)
+        if year < today.year - quarterly_years + 1:
+            continue
         for quarter in (1, 2, 3):
             period = FiscalPeriod(year, quarter)
             if is_published(period, today):
