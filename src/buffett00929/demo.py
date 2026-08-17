@@ -1,18 +1,21 @@
-"""合成測試資料。
+"""合成示範資料。
 
-**這些數字全部是為了測試計算邏輯而編造的，不對應任何真實公司。**
+**這些數字全部是為了驗證計算邏輯而編造的，不對應任何真實公司。**
 真實數據一律由 ``sources/`` 從官方來源抓取。
 
-``build_company()`` 產生一家可調整體質的公司，讓測試能針對
-「高毛利穩定成長」「獲利衰退」「高槓桿高 ROE」「配息陷阱」等情境
-各自構造出對應的財報序列。
+用途有二：
+
+1. ``buffett00929 demo`` ——在還沒接上資料來源時先看到 Dashboard 版面，
+   輸出會全程標示「合成範例資料」。
+2. 測試——``build_company()`` 可調整體質，方便構造
+   「高毛利穩定成長」「獲利衰退」「高槓桿高 ROE」「配息陷阱」等情境。
 """
 
 from __future__ import annotations
 
 from datetime import date
 
-from buffett00929.models import (
+from .models import (
     BalanceSheet,
     CashFlowStatement,
     Company,
@@ -177,3 +180,102 @@ def build_company(
 def empty_company(stock_id: str = "0000", name: str = "無資料公司") -> Company:
     """完全沒有財報資料的公司，用來確認缺料不會被算成 0 分。"""
     return Company(stock_id=stock_id, name=name)
+
+
+# --------------------------------------------------------------------------
+# 完整示範執行
+# --------------------------------------------------------------------------
+
+
+def demo_constituents() -> "ConstituentSet":
+    """合成成分股名單。
+
+    **這不是 00929 的真實持股。** 代號與名稱皆為虛構，用來驗證版面與計算，
+    真實名單一律由 ``sources/constituents.py`` 從官方來源抓取。
+    """
+    from .sources.constituents import Constituent, ConstituentSet
+
+    specs = [
+        ("8801", "示範半導體", 0.092),
+        ("8802", "示範電子", 0.081),
+        ("8803", "示範光電", 0.074),
+        ("8804", "示範封測", 0.066),
+        ("8805", "示範材料", 0.058),
+        ("8806", "示範網通", 0.049),
+        ("8807", "示範零組件", 0.041),
+        ("8808", "示範資訊", 0.033),
+    ]
+    return ConstituentSet(
+        constituents=[
+            Constituent(
+                stock_id=code,
+                name=name,
+                weight=DataPoint.of(weight, SOURCE, as_of=date(2026, 8, 15)),
+            )
+            for code, name, weight in specs
+        ],
+        source="合成範例資料（非真實成分股）",
+        as_of=date(2026, 8, 15),
+        attempts=["demo：使用合成資料，未連線任何外部來源"],
+    )
+
+
+def _demo_profiles() -> list[Company]:
+    """八種體質各異的公司，讓每個榜單與警報都有東西可顯示。"""
+    return [
+        build_company(stock_id="8801", name="示範半導體", gross_margin=0.52,
+                      operating_margin=0.34, net_margin=0.30, eps_growth=0.16, price=180),
+        build_company(stock_id="8802", name="示範電子", gross_margin=0.28,
+                      operating_margin=0.12, net_margin=0.09, eps_growth=0.05, price=62),
+        build_company(stock_id="8803", name="示範光電", gross_margin=0.34,
+                      gross_margin_drift=-0.025, eps_growth=-0.14, revenue_growth=-0.05,
+                      price=45, dividend_yield=0.088, dividend_payout=1.20),
+        build_company(stock_id="8804", name="示範封測", equity_ratio=0.24,
+                      net_margin=0.13, debt_ratio_of_equity=1.5, price=95),
+        build_company(stock_id="8805", name="示範材料", gross_margin=0.41,
+                      capex_ratio=0.75, eps_growth=0.06, price=120),
+        build_company(stock_id="8806", name="示範網通", gross_margin=0.38,
+                      eps_growth=0.11, price=88, receivable_ratio_final=0.34),
+        build_company(stock_id="8807", name="示範零組件", gross_margin=0.22,
+                      operating_margin=0.08, net_margin=0.06, eps_growth=0.02,
+                      share_growth=0.13, price=31),
+        # 刻意只給市場資料，用來驗證「資料不足」的呈現與排除排名的行為。
+        Company(stock_id="8808", name="示範資訊", industry="資訊服務",
+                etf_weight=DataPoint.of(0.033, SOURCE, as_of=date(2026, 8, 15))),
+    ]
+
+
+def build_demo_run(config, today: date | None = None):
+    """產生一次完整的合成分析，供 ``buffett00929 demo`` 使用。"""
+    from .loader import LoadedCompany
+    from .normalize import CumulativeDetection
+    from .pipeline import AnalysisRun, analyse_company
+    from .snapshots import diff_snapshots
+
+    today = today or date.today()
+    constituents = demo_constituents()
+
+    weights = {c.stock_id: c.weight for c in constituents.constituents}
+
+    results = []
+    for company in _demo_profiles():
+        # 權重以成分股名單為準，才會和「權重合計」對得起來。
+        if company.stock_id in weights:
+            company.etf_weight = weights[company.stock_id]
+        company.note_gap("本檔為合成範例資料，非真實財報")
+        loaded = LoadedCompany(
+            company=company,
+            detection=CumulativeDetection(True, "n/a", "合成資料，未進行累計數偵測"),
+            quarterly_incomes=[],
+        )
+        results.append(analyse_company(loaded, config, today=today))
+
+    run = AnalysisRun(
+        run_date=today,
+        constituents=constituents,
+        results=results,
+        warnings=["這是合成範例資料，所有數字均非真實財報"],
+        is_demo=True,
+    )
+    run.score_changes = diff_snapshots(run.to_snapshot(), None)
+    return run

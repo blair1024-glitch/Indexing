@@ -384,6 +384,9 @@ verdict:
     min_total_score: 75
     min_margin_of_safety: 0.20
     max_critical_flags: 0
+    # 財務安全子分數（0~100）的下限。總分再高也不該對財務結構脆弱的公司說 BUY——
+    # 高槓桿公司常因 ROE 被墊高而總分不低，這道門檻擋住那條路徑。
+    min_financial_safety: 50
   hold:
     min_total_score: 60
     min_margin_of_safety: -0.10
@@ -403,3 +406,16 @@ seven_year_test:
     min_business_quality: 55
     min_moat_ratio: 0.40
     max_critical_flags: 1
+
+# ---------------------------------------------------------------------------
+# 跨指標調整
+# ---------------------------------------------------------------------------
+# 有些判斷看的是多個指標的「組合」，單一 criterion 的門檻帶表達不了。
+# 這些調整會完整顯示在報表上（項目、扣分、理由），不會暗中改分數。
+adjustments:
+  # 規格第四、七節：「ROE 高，但是因為負債很高而造成的公司，不能直接給高分。」
+  # 觸發 high_roe_threshold + high_leverage_threshold 時，
+  # ROE 項目的得分上限壓到滿分的這個比例。
+  high_roe_high_debt:
+    enabled: true
+    roe_score_cap_ratio: 0.5

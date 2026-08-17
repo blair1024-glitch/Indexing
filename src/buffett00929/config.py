@@ -243,6 +243,23 @@ class CriterionResult:
 
 
 @dataclass
+class ScoreAdjustment:
+    """對整個評分項目的加減分，附理由。
+
+    用於門檻帶無法表達的跨指標規則，例如「高 ROE 但高負債時不得給高分」——
+    這件事看的是 ROE 與槓桿的**組合**，單一 criterion 的門檻帶表達不了。
+    每筆調整都會出現在報表上，不會是暗中改分數。
+    """
+
+    label: str
+    delta: float
+    reason: str
+
+    def to_dict(self) -> dict:
+        return {"label": self.label, "delta": self.delta, "reason": self.reason}
+
+
+@dataclass
 class ComponentScore:
     """一個評分項目（如 Management 20 分）的彙總結果。"""
 
@@ -250,10 +267,16 @@ class ComponentScore:
     label: str
     max_points: float
     criteria: list[CriterionResult] = field(default_factory=list)
+    adjustments: list[ScoreAdjustment] = field(default_factory=list)
+
+    @property
+    def criteria_points(self) -> float:
+        return sum(c.points for c in self.criteria if c.points is not None)
 
     @property
     def earned(self) -> float:
-        return sum(c.points for c in self.criteria if c.points is not None)
+        # 下限為 0：調整可以扣掉得分，但不會讓某一項變成負分去拉低其他項。
+        return max(0.0, self.criteria_points + sum(a.delta for a in self.adjustments))
 
     @property
     def scorable_max(self) -> float:
@@ -294,6 +317,8 @@ class ComponentScore:
             "label": self.label,
             "max_points": self.max_points,
             "earned": self.earned,
+            "criteria_points": self.criteria_points,
+            "adjustments": [a.to_dict() for a in self.adjustments],
             "scorable_max": self.scorable_max,
             "normalized": self.normalized,
             "coverage": self.coverage,
@@ -382,6 +407,7 @@ def apply_override(
 
 __all__ = [
     "ComponentScore",
+    "ScoreAdjustment",
     "Config",
     "ConfigError",
     "CriterionResult",

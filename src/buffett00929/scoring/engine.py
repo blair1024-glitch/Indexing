@@ -22,6 +22,7 @@ from ..config import (
     Config,
     CriterionResult,
     QUALITATIVE_BONUS_KEY,
+    ScoreAdjustment,
     apply_override,
     score_criterion,
 )
@@ -303,8 +304,45 @@ def score_company(
             allow_override=component in OVERRIDABLE_COMPONENTS,
         )
 
+    _apply_leverage_adjustment(score, config)
     score._penalty = red_flags.penalty(config)
     return score
+
+
+def _apply_leverage_adjustment(score: CompanyScore, config: Config) -> None:
+    """規格第四、七節：「ROE 高，但因為負債很高而造成的公司，不能直接給高分。」
+
+    這件事看的是 ROE 與槓桿的**組合**，單一 criterion 的門檻帶表達不了——
+    ROE 60% 在任何門檻帶裡都會拿滿分，即使它完全來自 4 倍槓桿。
+    因此在項目層級加一個明確的上限，並把扣分理由寫進報表。
+    """
+    settings = (config.scoring.get("adjustments") or {}).get("high_roe_high_debt") or {}
+    if not settings.get("enabled", True):
+        return
+    if not score.metrics.high_roe_via_leverage:
+        return
+
+    component = score.components.get("roe")
+    if component is None or not component.has_any_data:
+        return
+
+    cap_ratio = float(settings.get("roe_score_cap_ratio", 0.5))
+    cap = component.scorable_max * cap_ratio
+    excess = component.criteria_points - cap
+    if excess <= 0:
+        return
+
+    component.adjustments.append(
+        ScoreAdjustment(
+            label="高 ROE 但高負債，得分上限調整",
+            delta=-excess,
+            reason=(
+                f"{score.metrics.high_roe_note}。依規格第四、七節，"
+                f"槓桿撐出來的 ROE 不得直接給高分，本項得分上限壓至可評分滿分的 {cap_ratio:.0%}"
+                f"（{component.criteria_points:.1f} → {cap:.1f} 分）"
+            ),
+        )
+    )
 
 
 def grade_for(total: float, grades: list) -> tuple[str, str]:
@@ -342,16 +380,34 @@ def investment_verdict(score: CompanyScore, config: Config) -> tuple[str, str]:
     total = score.total_score
 
     buy = rules.get("buy") or {}
+    safety = score.financial_safety_score
+    min_safety = float(buy.get("min_financial_safety", 50))
+    safety_ok = safety is None or safety >= min_safety
     if (
         total >= float(buy.get("min_total_score", 75))
         and mos_value is not None
         and mos_value >= float(buy.get("min_margin_of_safety", 0.20))
         and critical <= int(buy.get("max_critical_flags", 0))
+        and safety_ok
     ):
         return (
             VERDICT_BUY,
             f"總分 {total:.0f}、安全邊際 {mos_value:.0%}、無重大紅旗，"
             "企業品質與價格同時到位",
+        )
+    if (
+        total >= float(buy.get("min_total_score", 75))
+        and mos_value is not None
+        and mos_value >= float(buy.get("min_margin_of_safety", 0.20))
+        and critical <= int(buy.get("max_critical_flags", 0))
+        and not safety_ok
+    ):
+        # 其他條件都到位，只差財務安全——這件事要講清楚，不能混進一般的 HOLD 理由。
+        return (
+            VERDICT_HOLD,
+            f"總分 {total:.0f}、安全邊際 {mos_value:.0%} 均達加碼標準，"
+            f"但財務安全僅 {safety:.0f} 分（門檻 {min_safety:.0f}），"
+            "財務結構風險未消化前不宜加碼",
         )
 
     hold = rules.get("hold") or {}
