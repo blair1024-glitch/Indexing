@@ -248,11 +248,24 @@ def _add_data_gaps(add, run: AnalysisRun) -> None:
 
 
 def _add_sources(add, run: AnalysisRun) -> None:
+    """列出**本次執行實際命中**的來源，而不是設定檔裡的優先序。
+
+    寫死一段「多年度歷史來自 X」的說明，在來源換掉時就會變成錯的，
+    而且錯得很安靜：逐項標示寫著 MOPS，總表卻仍宣稱 FinMind。
+    這裡改由 provenance 反推，總表與明細不可能再互相矛盾。
+    """
     add("## 資料來源")
     add("")
     add(f"- 成分股名單：{run.constituents.source}（資料日期 {run.constituents.as_of.isoformat()}）")
-    add("- 財報最新一期：證交所／櫃買中心 OpenAPI（官方）")
-    add("- 多年度歷史：FinMind（用於 CAGR、5–10 年平均 ROE、毛利率趨勢、歷史本益比分位）")
+
+    sources = run.data_sources
+    if sources:
+        add("- 財報與市場資料（依實際命中的數據點數排序）：")
+        for source, count in sources:
+            add(f"  - {source}（{count:,} 個數據點）")
+    else:
+        add("- 財報與市場資料：無任何可用數據點")
+
     add(f"- 產生時間：{run.run_date.isoformat()}")
     add("")
 

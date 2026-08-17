@@ -17,7 +17,7 @@ import math
 import re
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timezone
-from typing import Iterable, Sequence
+from typing import Iterable, Iterator, Sequence
 
 # --------------------------------------------------------------------------
 # Provenance
@@ -545,6 +545,27 @@ class Company:
 
     data_gaps: list[str] = field(default_factory=list)
     """抓取過程中記錄的缺料項目，會原樣呈現在報表上。"""
+
+    def iter_data_points(self) -> Iterator[DataPoint]:
+        """走訪這家公司所有帶 provenance 的數據點。
+
+        報表的「資料來源」段落據此產生。列舉實際命中的來源，
+        而不是把設定檔裡的優先序抄一遍——來源換掉時，
+        寫死的說明會變成錯的，而且錯得很安靜（明細標 MOPS、總表卻說 FinMind）。
+        """
+        containers = (
+            *self.income_statements,
+            *self.balance_sheets,
+            *self.cash_flows,
+            *self.dividends,
+            *self.monthly_revenues,
+            self.market_data,
+            self,
+        )
+        for container in containers:
+            for value in vars(container).values():
+                if isinstance(value, DataPoint):
+                    yield value
 
     def __post_init__(self) -> None:
         self.income_statements.sort(key=lambda s: s.period)

@@ -113,6 +113,14 @@ def write_dashboard(run: AnalysisRun, repo_root: Path) -> Path:
     return path
 
 
+
+def _source_summary(run) -> str:
+    """本次執行實際命中的來源，由 provenance 反推（見 markdown._add_sources）。"""
+    sources = run.data_sources
+    if not sources:
+        return "無任何可用數據點"
+    return "、".join(f"{source}（{count:,}）" for source, count in sources)
+
 def render_dashboard(run: AnalysisRun) -> str:
     parts: list[str] = [
         "<!doctype html>",
@@ -155,7 +163,7 @@ def render_dashboard(run: AnalysisRun) -> str:
     add(
         "<p>資料來源：成分股名單 "
         f"{_esc(run.constituents.source)}（{run.constituents.as_of.isoformat()}）；"
-        "財報最新一期為證交所／櫃買中心 OpenAPI；多年度歷史為 FinMind。</p>"
+        f"財報與市場資料 {_esc(_source_summary(run))}。</p>"
     )
     add(
         "<p>缺料一律標示「資料不足」且不計入評分分母，不以推估值填補。"

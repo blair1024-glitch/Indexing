@@ -107,6 +107,23 @@ class AnalysisRun:
         return [r for r in self.results if not r.score.is_rankable]
 
     @property
+    def data_sources(self) -> list[tuple[str, int]]:
+        """實際命中的資料來源與其數據點數，由多到少。
+
+        刻意由 provenance 反推，而不是把 sources.yaml 的優先序抄成一段文字：
+        寫死的說明在來源換掉時會變成錯的，而且錯得很安靜——
+        逐項標示明明寫著 MOPS，總表卻還宣稱歷史來自 FinMind。
+        """
+        counts: dict[str, int] = {}
+        for result in self.results:
+            for point in result.company.iter_data_points():
+                if not point.is_available or point.provenance is None:
+                    continue
+                for source in _leaf_sources(point.provenance.source):
+                    counts[source] = counts.get(source, 0) + 1
+        return sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+
+    @property
     def average_roe(self) -> tuple[DataPoint, int]:
         """回傳 (平均值, 納入計算的檔數)。檔數必須揭露，否則平均值無法解讀。"""
         return _average(
@@ -281,6 +298,12 @@ def analyse_company(
         change_summary=summarize_report(changes),
     )
 
+
+
+def _leaf_sources(source: str) -> set[str]:
+    """把 ``derived(A+derived(B))`` 這種組合來源拆回原始來源名稱。"""
+    flattened = source.replace("derived(", "").replace(")", "")
+    return {part.strip() for part in flattened.split("+") if part.strip()}
 
 def run_analysis(
     config: Config,

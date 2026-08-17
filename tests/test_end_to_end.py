@@ -206,3 +206,33 @@ class TestStaleReportCleanup:
     def test_keeps_the_summary_readme(self, run, tmp_path):
         markdown.write_reports(run, tmp_path)
         assert (tmp_path / "reports" / "README.md").exists()
+
+
+class TestSourceAttributionTracksReality:
+    """資料來源段落必須反映**實際命中**的來源。
+
+    先前這段是寫死的字串，宣稱多年度歷史來自 FinMind。改接 MOPS 之後
+    它沒跟著改，於是總表與自己的明細互相矛盾——明細標 MOPS、總表寫 FinMind；
+    連合成資料的 demo 也照樣宣稱資料來自 FinMind。
+    """
+
+    def test_demo_reports_synthetic_not_a_real_provider(self, run):
+        text = markdown.render_summary(run)
+        section = text.split("## 資料來源", 1)[1]
+        assert "fixture:synthetic" in section
+
+    def test_no_provider_is_named_unless_it_was_actually_used(self, run):
+        section = markdown.render_summary(run).split("## 資料來源", 1)[1]
+        for provider in ("FinMind", "MOPS", "OpenAPI"):
+            assert provider not in section, f"{provider} 沒被用到卻出現在資料來源"
+
+    def test_counts_come_from_real_data_points(self, run):
+        sources = run.data_sources
+        assert sources, "應至少有一個來源"
+        assert all(count > 0 for _source, count in sources)
+        assert sources == sorted(sources, key=lambda item: (-item[1], item[0]))
+
+    def test_dashboard_footer_agrees_with_the_markdown_summary(self, run):
+        html = dashboard.render_dashboard(run)
+        for source, _count in run.data_sources:
+            assert source in html
