@@ -3,38 +3,41 @@
 
 **一次性診斷工具，不是正式流程的一部分。**
 
-## 前三輪的結論
+## 前四輪的結論
 
-**第一輪：舊系統在新網域上已不存在。** ``mops.twse.com.tw`` 的所有傳統端點
-都只回 65 bytes 的轉址殘骸 ``<script> location.href = ... "/mops"; </script>``；
+**第一輪：** ``mops.twse.com.tw`` 的所有傳統端點只回 65 bytes 的轉址殘骸，
 ``/server-java/*`` 一律 404。
 
-**第二輪：新版是 SPA。** 側錄首頁得知資料走 ``POST /mops/api/<group>/<code>``
-且 body 是 **JSON**（第一輪送 form-encoded 才會全軍覆沒）::
+**第二輪：** 新版是 SPA，資料走 ``POST /mops/api/<group>/<code>`` 且 body 是 JSON。
 
-    POST /mops/api/home_page/t146sb10   body {"count": 8, "marketKind": "sii"}
-    POST /mops/api/home_page/t108sb31new  body {"yymm": "1158"}
+**第三輪：** 從 ``/mops/assets/index.js`` 挖出 397 個報表代碼與中文名稱，
+確認本專案要的三張表；同時發現 **``mopsov.twse.com.tw`` 舊網域還活著**。
 
-注意路徑中間那段 ``home_page``——這是第三輪失敗的原因。
+**第四輪：找到了。** 報表 chunk（``/mops/assets/t163sb04.js``）裡有完整的查詢定義::
 
-**第三輪：從 bundle 挖出完整路由表，並發現舊網域還活著。**
-``/mops/assets/index.js`` 裡有 397 個報表代碼與它們的中文名稱，
-本專案要的三張表確認為::
+    inputCode: [
+      {id:"TYPEK",  name:"市場別", value:"sii",
+       selectOption:[sii=上市, otc=上櫃, rotc=興櫃, pub=公開發行]},
+      {id:"year",   name:"年度", placeholder:"請輸入民國年"},
+      {id:"season", name:"季別", selectOption:[01,02,03,04]}
+    ],
+    btnCode: [{id:"searchBtn", action:{apiName:"ajax_t163sb04", method:"POST"}}]
 
-    t163sb04  綜合損益表      t163sb05  資產負債表      t163sb20  現金流量表
+實測 ``POST https://mopsov.twse.com.tw/mops/web/ajax_t163sb04``
+帶 ``TYPEK=sii&year=114&season=01`` 回傳 **1,578,302 bytes、1077 個 ``<tr>``**，
+內容為「上市公司第一季資料」。三張表都可用::
 
-同一輪也證實 ``mopsov.twse.com.tw/mops/web/t163sb04`` 仍回傳 45,714 bytes
-的真實 HTML（不是轉址殘骸）——**舊網域還在供應彙總報表**。
-而直接打 ``/mops/api/t163sb04`` 全部落空，因為少了中間的 group 區段。
+    ajax_t163sb04  綜合損益表   1,578,302 B
+    ajax_t163sb05  資產負債表   1,328,344 B
+    ajax_t163sb20  現金流量表     519,290 B
 
-## 第四輪（本輪）：讀 chunk，拿到確切的端點與參數
+**一次請求＝該期別全市場**，正是規劃需要的量級（10 年約 120 次請求）。
 
-路由表顯示每個報表都是獨立的 lazy chunk（``import("./t163sb04.js")``），
-**發送請求的程式碼就在那個 chunk 裡**。把 chunk 抓下來讀，
-就能得到確切的 API 路徑與 payload 欄位名——不必再猜，也不必開瀏覽器。
+## 第五輪（本輪）：把表格結構挖清楚，才能寫解析器
 
-同時並行測試舊網域的 ``ajax_t163sb04`` 表單查詢：
-第三輪已證明舊網域會回真實內容，這是同樣值得一試的路徑。
+彙總報表一頁包含**多個表格**（一般業／金融業／證券業／保險業的科目不同），
+欄位隨業別而異。解析器不能用猜的——本輪把每個表格的表頭與首筆資料列印出來，
+並實測：``season=04`` 是否給年度數、``TYPEK=otc`` 是否給上櫃、以及連續請求的節流需求。
 
 用法（須在網路可通的環境執行，例如 GitHub Actions）：
 
@@ -45,17 +48,15 @@ from __future__ import annotations
 
 import re
 import sys
-from typing import Any
+import time
+from html import unescape
 
 import requests
 
-BASE = "https://mops.twse.com.tw"
 LEGACY = "https://mopsov.twse.com.tw"
-ASSETS = f"{BASE}/mops/assets"
-TIMEOUT = 40
+TIMEOUT = 60
 
-# 本專案要的三張表，代碼由第三輪的路由表確認。
-TARGETS = {
+REPORTS = {
     "t163sb04": "綜合損益表",
     "t163sb05": "資產負債表",
     "t163sb20": "現金流量表",
@@ -66,230 +67,146 @@ HEADERS = {
         "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
         "(KHTML, like Gecko) Chrome/126.0 Safari/537.36"
     ),
-    "Accept": "application/json, text/plain, */*",
     "Accept-Language": "zh-TW,zh;q=0.9",
-    "Referer": f"{BASE}/mops/",
-    "Origin": BASE,
+    "Content-Type": "application/x-www-form-urlencoded",
+    "Referer": f"{LEGACY}/mops/web/t163sb04",
+    "Origin": LEGACY,
 }
 
 SESSION = requests.Session()
 SESSION.headers.update(HEADERS)
 
-
-def preview(text: Any, limit: int = 400) -> str:
-    return " ".join(str(text).split())[:limit]
+TAG = re.compile(r"<[^>]+>")
 
 
 def rule(title: str) -> None:
     print(f"\n{'=' * 78}\n{title}\n{'=' * 78}")
 
 
-# ----------------------------------------------------------------------
-# 階段 1：抓下報表 chunk，讀出它真正呼叫的端點
-# ----------------------------------------------------------------------
+def cells(row_html: str) -> list[str]:
+    """把一列 HTML 拆成純文字儲存格。"""
+    raw = re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", row_html, re.S | re.I)
+    return [" ".join(unescape(TAG.sub("", c)).split()) for c in raw]
 
 
-def mine_chunks() -> tuple[set[str], set[str]]:
-    """回傳 (API 路徑, payload 欄位名候選)。"""
-    rule("階段 1：讀取報表 chunk，找出確切的 API 路徑與參數")
-
-    api_paths: set[str] = set()
-    param_names: set[str] = set()
-
-    for code, label in TARGETS.items():
-        url = f"{ASSETS}/{code}.js"
-        print(f"\n── {code}（{label}）──\n{url}")
-        try:
-            response = SESSION.get(url, timeout=TIMEOUT)
-        except Exception as exc:  # noqa: BLE001
-            print(f"  ✗ {type(exc).__name__}: {exc}")
-            continue
-
-        if response.status_code != 200:
-            print(f"  ✗ HTTP {response.status_code}")
-            continue
-
-        text = response.text
-        print(f"  ✓ {len(text):,} bytes")
-
-        found = set(re.findall(r'["\'`]([^"\'`]*api/[A-Za-z0-9_\-/]{3,80})', text))
-        found |= set(re.findall(r'["\'`](/[A-Za-z0-9_\-/]*t\d{2,3}s[a-z]\w*)["\'`]', text))
-        api_paths |= found
-        print(f"  API 字串：{sorted(found) if found else '（無）'}")
-
-        # 送出請求的那一段程式碼——payload 欄位名就在裡面。
-        for match in re.finditer(r"(post|get|request|fetch|axios)\s*[(<]", text):
-            start = max(0, match.start() - 400)
-            snippet = text[start : match.end() + 600]
-            if "api" in snippet or "t163" in snippet:
-                print(f"\n  ── 送出請求處 ──\n  …{preview(snippet, 900)}…")
-
-        # 表單欄位：民國年、季別、市場別的實際參數名。
-        for key in re.findall(r"\b(year|season|quarter|market\w*|type\w*|TYPEK|"
-                              r"companyId|dataType|date|yymm|isQuery|encode\w*)\b", text):
-            param_names.add(key)
-
-        for term in ("民國", "季別", "年度", "市場別", "全部", "上市", "上櫃"):
-            for match in re.finditer(re.escape(term), text):
-                start = max(0, match.start() - 200)
-                print(f"  「{term}」附近：…{preview(text[start : match.end() + 260], 460)}…")
-                break  # 每個詞只看第一次出現
-
-    print(f"\n-- 彙整：API 路徑 --")
-    for path in sorted(api_paths):
-        print(f"  {path}")
-    print(f"\n-- 彙整：可能的參數名 --\n  {sorted(param_names)}")
-    return api_paths, param_names
-
-
-# ----------------------------------------------------------------------
-# 階段 2：打新版 API
-# ----------------------------------------------------------------------
-
-PAYLOADS: list[tuple[str, dict[str, Any]]] = [
-    ("市場別 + 民國年 + 季", {"marketKind": "sii", "year": "114", "season": "01"}),
-    ("市場別 + 民國年 + 季（無前導零）", {"marketKind": "sii", "year": "114", "season": "1"}),
-    ("加 isQuery", {"marketKind": "sii", "year": "114", "season": "01", "isQuery": "Y"}),
-    ("舊參數名 TYPEK", {"TYPEK": "sii", "year": "114", "season": "01"}),
-]
-
-
-def call(url: str, payload: dict[str, Any], label: str) -> bool:
-    try:
-        response = SESSION.post(url, json=payload, timeout=TIMEOUT)
-    except Exception as exc:  # noqa: BLE001
-        print(f"    {label:<28} ✗ {type(exc).__name__}: {exc}")
-        return False
-
-    body = response.text or ""
-    note = ""
-    hit = False
-    try:
-        parsed = response.json()
-    except ValueError:
-        pass
-    else:
-        if isinstance(parsed, dict):
-            note = f" keys={list(parsed)[:8]}"
-            payload_data = parsed.get("data") or parsed.get("result")
-            if payload_data:
-                hit = True
-                note += "  ★ 有 data"
-
-    print(f"    {label:<28} HTTP {response.status_code} {len(body):>8,}B{note}")
-    print(f"      {preview(body, 260)}")
-    if hit:
-        print(f"\n      ── 完整回應（前 3000 字）──\n      {preview(body, 3000)}\n")
-    return hit
-
-
-def probe_new_api(discovered: set[str]) -> list[str]:
-    rule("階段 2：呼叫新版 API")
-
-    # 第二輪確認 group 區段存在（home_page）。財報頁的 group 未知，
-    # 所以把 chunk 挖到的路徑排最前面，其餘為推測。
-    candidates: list[str] = []
-    for path in sorted(discovered):
-        cleaned = path.lstrip("/")
-        for code in TARGETS:
-            if code in cleaned:
-                candidates.append(f"{BASE}/{cleaned.lstrip('/')}")
-    for code in TARGETS:
-        for group in ("", "t163/", "quer_summary/", "query/", "summary/", "web/"):
-            candidates.append(f"{BASE}/mops/api/{group}{code}")
-
-    seen: set[str] = set()
-    hits: list[str] = []
-    for url in candidates:
-        if url in seen:
-            continue
-        seen.add(url)
-        print(f"\n  ── {url} ──")
-        for label, payload in PAYLOADS:
-            if call(url, payload, label):
-                hits.append(url)
-                break
-    return hits
-
-
-# ----------------------------------------------------------------------
-# 階段 3：舊網域的表單查詢（第三輪已證實舊網域會回真實內容）
-# ----------------------------------------------------------------------
-
-
-def probe_legacy_forms() -> list[str]:
-    rule("階段 3：舊網域 mopsov 的彙總報表表單查詢")
-
+def fetch(code: str, typek: str, year: str, season: str) -> tuple[str, float]:
+    url = f"{LEGACY}/mops/web/ajax_{code}"
     form = {
         "encodeURIComponent": "1",
         "step": "1",
         "firstin": "1",
         "off": "1",
-        "TYPEK": "sii",
-        "year": "114",
-        "season": "01",
+        "TYPEK": typek,
+        "year": year,
+        "season": season,
     }
-    legacy_headers = {
-        "Content-Type": "application/x-www-form-urlencoded",
-        "Referer": f"{LEGACY}/mops/web/t163sb04",
-        "Origin": LEGACY,
-    }
-
-    hits: list[str] = []
-    for code, label in TARGETS.items():
-        for prefix in ("ajax_", ""):
-            url = f"{LEGACY}/mops/web/{prefix}{code}"
-            try:
-                response = SESSION.post(
-                    url, data=form, headers=legacy_headers, timeout=TIMEOUT
-                )
-            except Exception as exc:  # noqa: BLE001
-                print(f"  ✗ {url} → {type(exc).__name__}: {exc}")
-                continue
-
-            body = response.text or ""
-            # 彙總報表的特徵：整頁表格，含公司代號欄與大量 <tr>。
-            rows = body.count("<tr")
-            has_header = "公司代號" in body or "公司名稱" in body
-            marker = "  ★ 疑似彙總表" if rows > 50 and has_header else ""
-            print(
-                f"\n  {url}（{label}）→ HTTP {response.status_code}, "
-                f"{len(body):,}B, {rows} 個 <tr>, 含公司代號={has_header}{marker}"
-            )
-            print(f"    {preview(body, 300)}")
-
-            if marker:
-                hits.append(url)
-                # 表頭是寫解析器的依據，完整印出來。
-                header = re.search(r"<tr[^>]*>(.{0,2500}?)</tr>", body, re.S)
-                if header:
-                    print(f"\n    ── 表頭 ──\n    {preview(header.group(1), 1600)}")
-                first_data = re.findall(r"<tr[^>]*>(.{0,2500}?)</tr>", body, re.S)
-                for row in first_data[1:4]:
-                    print(f"\n    ── 資料列 ──\n    {preview(row, 900)}")
-    return hits
+    started = time.monotonic()
+    response = SESSION.post(url, data=form, timeout=TIMEOUT)
+    elapsed = time.monotonic() - started
+    response.encoding = response.apparent_encoding or "utf-8"
+    return response.text, elapsed
 
 
-# ----------------------------------------------------------------------
+def describe_tables(html: str, *, max_tables: int = 8) -> None:
+    """列出頁面裡每個表格的表頭與首筆資料——這就是寫解析器的依據。"""
+    tables = re.findall(r"<table[^>]*>(.*?)</table>", html, re.S | re.I)
+    print(f"  表格數：{len(tables)}")
+
+    shown = 0
+    for index, table in enumerate(tables):
+        rows = re.findall(r"<tr[^>]*>(.*?)</tr>", table, re.S | re.I)
+        if len(rows) < 3:
+            continue
+        header_index = next(
+            (i for i, r in enumerate(rows) if "公司代號" in r),
+            None,
+        )
+        if header_index is None:
+            continue
+
+        shown += 1
+        if shown > max_tables:
+            print(f"  （其餘 {len(tables) - index} 個表格省略）")
+            break
+
+        header = cells(rows[header_index])
+        print(f"\n  ── 表格 #{index}：{len(rows)} 列，表頭 {len(header)} 欄 ──")
+        print(f"     表頭：{header}")
+        for row in rows[header_index + 1 : header_index + 3]:
+            data = cells(row)
+            if data and data[0].strip().isdigit():
+                print(f"     資料：{data}")
+
+
+def probe_structure() -> None:
+    rule("階段 1：三張表的欄位結構（民國 114 年第一季，上市）")
+    for code, label in REPORTS.items():
+        html, elapsed = fetch(code, "sii", "114", "01")
+        title = re.search(r"<h2>(.*?)</h2>", html, re.S)
+        print(f"\n### {code} {label} — {len(html):,} 字元，{elapsed:.1f}s")
+        print(f"  頁面標題：{title.group(1).strip() if title else '（無）'}")
+        describe_tables(html)
+
+
+def probe_annual_and_otc() -> None:
+    rule("階段 2：season=04 是否為年度數，TYPEK=otc 是否為上櫃")
+
+    for season, expect in (("04", "第四季/年度"), ("01", "第一季")):
+        html, _ = fetch("t163sb04", "sii", "113", season)
+        title = re.search(r"<h2>(.*?)</h2>", html, re.S)
+        rows = html.count("<tr")
+        print(
+            f"  season={season}（預期 {expect}）→ {len(html):,} 字元，{rows} 列，"
+            f"標題：{title.group(1).strip() if title else '（無）'}"
+        )
+
+    html, _ = fetch("t163sb04", "otc", "114", "01")
+    title = re.search(r"<h2>(.*?)</h2>", html, re.S)
+    print(
+        f"  TYPEK=otc → {len(html):,} 字元，{html.count('<tr')} 列，"
+        f"標題：{title.group(1).strip() if title else '（無）'}"
+    )
+
+
+def probe_history_depth() -> None:
+    rule("階段 3：歷史深度——十年前的期別是否還查得到")
+    for year in ("105", "110", "114"):
+        html, elapsed = fetch("t163sb04", "sii", year, "01")
+        title = re.search(r"<h2>(.*?)</h2>", html, re.S)
+        has_data = "公司代號" in html
+        print(
+            f"  民國 {year} 年 Q1 → {len(html):,} 字元，{html.count('<tr')} 列，"
+            f"有資料={has_data}，{elapsed:.1f}s，"
+            f"標題：{title.group(1).strip() if title else '（無）'}"
+        )
+
+
+def probe_rate_limit() -> None:
+    rule("階段 4：連續請求的節流需求")
+    print("  連打 6 次（無間隔），觀察回應大小與耗時是否劣化：")
+    for i in range(6):
+        try:
+            html, elapsed = fetch("t163sb04", "sii", "114", "01")
+        except Exception as exc:  # noqa: BLE001
+            print(f"    第 {i + 1} 次 ✗ {type(exc).__name__}: {exc}")
+            break
+        blocked = "公司代號" not in html
+        print(
+            f"    第 {i + 1} 次：{len(html):,} 字元，{elapsed:.1f}s"
+            f"{'  ← 被擋' if blocked else ''}"
+        )
 
 
 def main() -> int:
-    discovered, _params = mine_chunks()
-    api_hits = probe_new_api(discovered)
-    legacy_hits = probe_legacy_forms()
+    probe_structure()
+    probe_annual_and_otc()
+    probe_history_depth()
+    probe_rate_limit()
 
     rule("結論")
-    if api_hits:
-        print(f"✓ 新版 API 可用：{api_hits}")
-        print("  → 首選。JSON 回應最好解析，依實際欄位寫 sources/mops.py")
-    if legacy_hits:
-        print(f"✓ 舊網域彙總報表可用：{legacy_hits}")
-        print("  → 備案。HTML 表格，解析器要對表頭做 SchemaWatch 檢查")
-    if not api_hits and not legacy_hits:
-        print("✗ 兩條路都沒拿到資料。")
-        print("  → 看階段 1 印出的「送出請求處」找出正確的 group 與參數名；")
-        print("     若 chunk 讀不到，改用 Playwright 實際操作查詢表單並側錄")
-        print("     （一個 context 只載一頁，任何導航前先讀完 response body）。")
+    print("· 表頭與資料列 → 直接寫成 sources/mops.py 的欄位對應")
+    print("· 表格數 > 1 表示分業別，解析器要逐表處理並以公司代號為鍵")
+    print("· 節流間隔依階段 4 的實測結果設定於 sources.yaml")
     return 0
 
 
