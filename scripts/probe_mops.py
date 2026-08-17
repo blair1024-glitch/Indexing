@@ -3,22 +3,24 @@
 
 **一次性診斷工具，不是正式流程的一部分。**
 
-背景：沒有 FinMind token 時，唯一的財報來源是證交所 OpenAPI 的最新一期，
-目前為 2026Q2＝**半年累計數**。系統正確地拒絕把半年當成一年，
-因此連「最近一年 ROE」都算不出來，0 / 50 檔可排名。
-改由 MOPS 取得歷史財報——官方來源，且不需第三方憑證。
+## 第一輪結果：舊系統已不存在
 
-**關鍵限制：請求量。** 逐檔查詢是 50 檔 × 40 季 × 3 表 ≈ 6000 次請求，必被擋。
-所以只有「彙總報表」（一次一期、全市場所有公司）這條路可行：
-10 年 × 4 季 × 3 表 ≈ 120 次請求。本探測的首要目的就是確認這條路存在。
+實測（2026-08-17）確認所有傳統端點都只回 65 bytes 的轉址殘骸::
 
-本檔全部是**問題**，不是假設。要回答：
+    <script> location.href = location.origin + "/mops"; </script>
 
-1. 網域是 mops.twse.com.tw 還是 mopsov.twse.com.tw？（近年有遷移）
-2. 彙總報表端點存在嗎？GET 還是 POST？參數實際叫什麼？
-3. 回應是 HTML／CSV／JSON？欄位名稱實際長什麼樣？
-4. XBRL 批次下載可用嗎？（可用的話比解析 HTML 穩定得多）
-5. 連續請求多少次會被擋？
+`/mops/web/t163sb04`、`/mops/api/t163sb04`、`t57sb01_q1` 皆同；
+`/server-java/*`（含 FileDownLoad）一律 404——舊的 Java servlet 層已拆除。
+
+結論：**form POST 抓彙總報表的做法在 2026 年已死**，不能實作。
+
+## 第二輪：新版是 SPA，側錄它自己呼叫的 API
+
+新版 MOPS 既然是單頁應用，資料就一定來自某組 JSON 端點。
+這和先前找復華持股 API 是同一個情況，用同一招：
+載入頁面、側錄 XHR/fetch、找出真正的資料端點。
+
+找到端點後直接打它，不需要瀏覽器——**這才是可維護的實作方式**。
 
 用法（須在網路可通的環境執行，例如 GitHub Actions）：
 
@@ -27,248 +29,129 @@
 
 from __future__ import annotations
 
+import json
 import sys
-import time
 from typing import Any
 
-import requests
+BASE = "https://mops.twse.com.tw"
+PREVIEW = 420
 
-PREVIEW = 500
-TIMEOUT = 30
-
-HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
-    ),
-    "Accept": "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8",
-    "Accept-Language": "zh-TW,zh;q=0.9",
-}
-
-# 民國年。2026 年＝民國 115 年。用 2025Q1（民國 114 年第 1 季）當測試期別——
-# 夠舊確定已公告，又夠新確定還在系統裡。
-TEST_ROC_YEAR = "114"
-TEST_SEASON = "01"
-
-DOMAINS = [
-    "https://mops.twse.com.tw",
-    "https://mopsov.twse.com.tw",
-    "https://mops.twse.com.tw/mops",
+# 新版 MOPS 的進入點。財報查詢的實際路由未知——先載入首頁側錄，
+# 再嘗試幾個可能的 hash 路由，看哪一個會觸發財報相關的 XHR。
+ENTRY_POINTS = [
+    ("首頁", f"{BASE}/mops/"),
+    ("財務報表（猜測路由 A）", f"{BASE}/mops/#/web/t163sb04"),
+    ("財務報表（猜測路由 B）", f"{BASE}/mops/#/t163sb04"),
 ]
+
+# 財報相關的訊號字詞。用來從一堆追蹤與版面請求裡挑出真正有用的回應。
+SIGNALS = (
+    "公司代號", "營業收入", "資產總", "權益總", "每股盈餘",
+    "stockNo", "companyId", "revenue", "季別", "年度",
+)
 
 
 def preview(text: str, limit: int = PREVIEW) -> str:
-    collapsed = " ".join(text.split())
-    return collapsed[:limit] + ("…" if len(collapsed) > limit else "")
+    return " ".join(text.split())[:limit]
 
 
-def describe_response(response: requests.Response) -> None:
-    content_type = response.headers.get("content-type", "?")
-    print(f"  HTTP {response.status_code} | {content_type} | {len(response.content)} bytes")
-
-    body = response.text
-    # 判斷是不是真的拿到報表，還是拿到錯誤頁／查無資料。
-    markers = {
-        "含 <table>": "<table" in body.lower(),
-        "含 公司代號": "公司代號" in body,
-        "含 查詢無資料": "查詢無資料" in body or "查無資料" in body,
-        "含 系統忙碌/請稍後": ("系統" in body and "忙碌" in body) or "請稍後" in body,
-        "含 驗證碼": "驗證碼" in body or "captcha" in body.lower(),
-    }
-    hits = [name for name, hit in markers.items() if hit]
-    print(f"  訊號：{', '.join(hits) if hits else '（無明顯訊號）'}")
-    print(f"  開頭：{preview(body, 300)}")
-
-
-def try_request(
-    label: str,
-    method: str,
-    url: str,
-    *,
-    params: dict | None = None,
-    data: dict | None = None,
-) -> requests.Response | None:
-    print(f"\n--- {label} ---")
-    print(f"  {method} {url}")
-    if params:
-        print(f"  params={params}")
-    if data:
-        print(f"  data={data}")
+def probe_spa() -> list[dict[str, Any]]:
+    """載入新版 MOPS 並側錄所有 XHR/fetch 回應。"""
     try:
-        response = requests.request(
-            method, url, params=params, data=data, headers=HEADERS, timeout=TIMEOUT
-        )
-    except Exception as exc:  # noqa: BLE001 - 探測工具，任何錯誤都要看到
-        print(f"  ✗ {type(exc).__name__}: {exc}")
-        return None
-    describe_response(response)
-    return response
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        print("✗ 未安裝 playwright，無法側錄 SPA 流量")
+        return []
 
+    captured: list[dict[str, Any]] = []
 
-# --------------------------------------------------------------------------
-# 一、網域是否還在
-# --------------------------------------------------------------------------
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        context = browser.new_context(locale="zh-TW")
+        page = context.new_page()
 
+        def on_response(response) -> None:
+            if response.request.resource_type not in ("xhr", "fetch"):
+                return
+            entry: dict[str, Any] = {
+                "url": response.url,
+                "method": response.request.method,
+                "status": response.status,
+                "content_type": response.headers.get("content-type", "?"),
+                "post_data": response.request.post_data,
+                "body": "",
+            }
+            try:
+                entry["body"] = response.text()[:3000]
+            except Exception as exc:  # noqa: BLE001
+                entry["body"] = f"(無法讀取：{exc})"
+            captured.append(entry)
 
-def probe_domains() -> list[str]:
-    print("=" * 78)
-    print("一、網域可達性")
-    print("=" * 78)
+        page.on("response", on_response)
 
-    alive = []
-    for domain in DOMAINS:
-        response = try_request(domain, "GET", f"{domain}/")
-        if response is not None and response.status_code < 400:
-            alive.append(domain)
-    print(f"\n可達網域：{alive or '（無）'}")
-    return alive
+        for label, url in ENTRY_POINTS:
+            print(f"\n{'=' * 78}\n載入：{label}\n{url}\n{'=' * 78}")
+            before = len(captured)
+            try:
+                page.goto(url, wait_until="networkidle", timeout=60_000)
+            except Exception as exc:  # noqa: BLE001
+                print(f"  載入警告：{type(exc).__name__}: {exc}（仍輸出已側錄的請求）")
+            page.wait_for_timeout(4000)
+            print(f"  新增側錄 {len(captured) - before} 個 XHR/fetch")
 
-
-# --------------------------------------------------------------------------
-# 二、彙總報表（首要目標）
-# --------------------------------------------------------------------------
-
-# MOPS 的彙總報表代號（依歷來慣例，實際是否可用由本探測回答）：
-#   t163sb04  綜合損益表（一般業）
-#   t163sb05  資產負債表（一般業）
-#   t163sb20  現金流量表
-# 舊路徑為 /mops/web/<code>，新版可能改為 /mops/api/<code> 或其他。
-SUMMARY_REPORTS = [
-    ("綜合損益表 t163sb04", "t163sb04"),
-    ("資產負債表 t163sb05", "t163sb05"),
-    ("現金流量表 t163sb20", "t163sb20"),
-]
-
-PATH_SHAPES = ["/mops/web/{code}", "/mops/api/{code}", "/server-java/{code}", "/{code}"]
-
-
-def probe_summary_reports(domain: str) -> None:
-    print("\n" + "=" * 78)
-    print(f"二、彙總報表（一次一期全市場）—— {domain}")
-    print("=" * 78)
-    print(f"測試期別：民國 {TEST_ROC_YEAR} 年第 {TEST_SEASON} 季\n")
-
-    # MOPS 傳統上用 form POST，參數名稱歷來為 encodeURIComponent/step/firstin/
-    # TYPEK（市場別）/year/season。這裡把最可能的組合實際打出去看回應。
-    payload = {
-        "encodeURIComponent": "1",
-        "step": "1",
-        "firstin": "1",
-        "off": "1",
-        "TYPEK": "sii",  # sii=上市, otc=上櫃
-        "year": TEST_ROC_YEAR,
-        "season": TEST_SEASON,
-    }
-
-    for label, code in SUMMARY_REPORTS:
-        for shape in PATH_SHAPES:
-            url = domain + shape.format(code=code)
-            response = try_request(f"{label} POST {shape}", "POST", url, data=payload)
-            if response is not None and response.status_code == 200 and "<table" in response.text.lower():
-                print("  ★ 疑似取得報表——列印表頭：")
-                dump_table_headers(response.text)
-                return  # 找到一個可用形狀就夠了，其餘同理
-            time.sleep(1.5)
-
-
-def dump_table_headers(html: str, limit: int = 3) -> None:
-    """把前幾個表格的表頭列出來，用來確認欄位名稱。"""
-    import re
-
-    tables = re.findall(r"<table.*?</table>", html, flags=re.S | re.I)
-    print(f"    找到 {len(tables)} 個 <table>")
-    for index, table in enumerate(tables[:limit], start=1):
-        cells = re.findall(r"<t[hd][^>]*>(.*?)</t[hd]>", table, flags=re.S | re.I)
-        cleaned = [" ".join(re.sub(r"<[^>]+>", "", c).split()) for c in cells[:20]]
-        cleaned = [c for c in cleaned if c]
-        print(f"    [表 {index}] 前 20 格：{cleaned}")
-
-
-# --------------------------------------------------------------------------
-# 三、XBRL 批次下載
-# --------------------------------------------------------------------------
-
-
-def probe_xbrl(domain: str) -> None:
-    print("\n" + "=" * 78)
-    print("三、XBRL 批次下載（若可用會比解析 HTML 穩定得多）")
-    print("=" * 78)
-
-    for label, path, payload in (
-        (
-            "FileDownLoad 批次",
-            "/server-java/FileDownLoad",
-            {
-                "step": "9",
-                "functionName": "t187ap14_L",
-                "filePath": "/t187ap14_L/",
-                "fileName": f"{TEST_ROC_YEAR}{TEST_SEASON}.zip",
-            },
-        ),
-        (
-            "t57sb01 XBRL 查詢",
-            "/mops/web/t57sb01_q1",
-            {"encodeURIComponent": "1", "step": "1", "firstin": "1",
-             "TYPEK": "sii", "year": TEST_ROC_YEAR, "season": TEST_SEASON},
-        ),
-    ):
-        try_request(label, "POST", domain + path, data=payload)
-        time.sleep(1.5)
-
-
-# --------------------------------------------------------------------------
-# 四、速率限制
-# --------------------------------------------------------------------------
-
-
-def probe_rate_limit(domain: str) -> None:
-    """連續請求，看第幾次開始被擋。
-
-    這決定實作的間隔設定：120 次請求若每次要等 10 秒，一輪就要 20 分鐘，
-    對每日排程來說仍可接受；若要等 60 秒就不可行，得改用快取回補策略。
-    """
-    print("\n" + "=" * 78)
-    print("四、速率限制：連續 6 次請求，間隔 1 秒")
-    print("=" * 78)
-
-    url = f"{domain}/mops/web/t163sb04"
-    payload = {
-        "encodeURIComponent": "1", "step": "1", "firstin": "1", "off": "1",
-        "TYPEK": "sii", "year": TEST_ROC_YEAR, "season": TEST_SEASON,
-    }
-    for attempt in range(1, 7):
-        started = time.time()
+        # 頁面上有什麼可點的——新版路由未知時，選單文字是最好的線索。
+        print(f"\n{'=' * 78}\n頁面連結與選單文字（用來找財報查詢的實際路由）\n{'=' * 78}")
         try:
-            response = requests.post(url, data=payload, headers=HEADERS, timeout=TIMEOUT)
-        except Exception as exc:  # noqa: BLE001
-            print(f"  第 {attempt} 次：✗ {type(exc).__name__}: {exc}")
-        else:
-            blocked = "忙碌" in response.text or response.status_code == 429
-            print(
-                f"  第 {attempt} 次：HTTP {response.status_code}，"
-                f"{len(response.content)} bytes，{time.time() - started:.1f}s"
-                f"{'　★ 疑似被擋' if blocked else ''}"
+            links = page.eval_on_selector_all(
+                "a[href]",
+                "els => els.slice(0, 60).map(e => (e.textContent||'').trim() + ' -> ' + e.getAttribute('href'))",
             )
-        time.sleep(1)
+            for link in links:
+                if link.strip(" ->"):
+                    print(f"  {link[:160]}")
+        except Exception as exc:  # noqa: BLE001
+            print(f"  無法讀取連結：{exc}")
+
+        browser.close()
+
+    return captured
+
+
+def report(captured: list[dict[str, Any]]) -> None:
+    print(f"\n{'=' * 78}\n側錄結果：共 {len(captured)} 個 XHR/fetch\n{'=' * 78}")
+
+    interesting = []
+    for index, entry in enumerate(captured, start=1):
+        body = entry["body"] or ""
+        hits = [s for s in SIGNALS if s in body or s in entry["url"]]
+        marker = f"  ★ 命中 {hits[:4]}" if hits else ""
+        if hits:
+            interesting.append(entry)
+        print(f"\n[{index}] {entry['method']} HTTP {entry['status']} | {entry['content_type']}")
+        print(f"    {entry['url'][:200]}")
+        if entry["post_data"]:
+            print(f"    POST body：{preview(str(entry['post_data']), 200)}")
+        print(f"    回應開頭：{preview(body, 260)}{marker}")
+
+    print(f"\n{'=' * 78}\n疑似財報資料端點：{len(interesting)} 個\n{'=' * 78}")
+    for entry in interesting:
+        print(f"\n{entry['method']} {entry['url']}")
+        if entry["post_data"]:
+            print(f"  POST body：{entry['post_data']}")
+        print(f"  完整回應（前 1500 字）：\n{entry['body'][:1500]}")
+
+    if not interesting:
+        print("（無）——需要實際操作查詢表單才會觸發資料請求，或路由猜錯了。")
+        print("請看上方「頁面連結與選單文字」找出財報查詢的真實路由，下一輪再試。")
 
 
 def main() -> int:
-    alive = probe_domains()
-    if not alive:
-        print("\n✗ 所有候選網域都不可達，MOPS 路線需重新評估")
-        return 0
-
-    domain = alive[0]
-    probe_summary_reports(domain)
-    probe_xbrl(domain)
-    probe_rate_limit(domain)
-
-    print("\n" + "=" * 78)
-    print("結論指引")
-    print("=" * 78)
-    print("· 有取到含「公司代號」的 <table> → 彙總報表可用，依表頭寫解析器")
-    print("· 只拿到錯誤頁或驗證碼 → 該路徑不可用，換路徑形狀或改走 XBRL")
-    print("· 被擋很快 → 需拉長間隔並把歷史永久快取，避免每次重抓")
+    captured = probe_spa()
+    report(captured)
+    print(f"\n{'=' * 78}\n結論指引\n{'=' * 78}")
+    print("· 有標記 ★ 的 JSON 端點 → 直接打它，依實際欄位寫解析器，不需瀏覽器")
+    print("· 只有版面/追蹤請求 → 依選單連結找出財報查詢路由，下一輪針對它側錄")
+    print("· 若查詢必須互動觸發 → 下一輪用 Playwright 實際填表送出再側錄")
     return 0
 
 
