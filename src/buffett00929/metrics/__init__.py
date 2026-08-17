@@ -42,8 +42,32 @@ def reinvestment_return(company: Company, years: int = 5) -> DataPoint:
     if not first.is_available or not last.is_available:
         return DataPoint.missing("缺期初或期末淨利，無法計算盈餘再投資報酬")
 
-    retained_total = 0.0
     inputs: list[DataPoint] = [first, last]
+
+    # 首選：直接用資產負債表的保留盈餘餘額差額。
+    # 期間累計保留盈餘就是期末餘額 − 期初餘額，不必回推股利——
+    # 官方彙總報表有保留盈餘，卻沒有股利支付金額，
+    # 靠股利回推會讓整項指標在沒有第三方資料時永遠算不出來。
+    balances = {b.period.year: b for b in company.annual_balances()}
+    opening = balances.get(incomes[0].period.year)
+    closing = balances.get(incomes[-1].period.year)
+    if (
+        opening is not None
+        and closing is not None
+        and opening.retained_earnings.is_available
+        and closing.retained_earnings.is_available
+    ):
+        retained_total = closing.retained_earnings.value - opening.retained_earnings.value  # type: ignore[operator]
+        if retained_total <= 0:
+            return DataPoint.missing("期間累計保留盈餘 ≤ 0，盈餘再投資報酬無意義")
+        delta = last.value - first.value  # type: ignore[operator]
+        return DataPoint.derived(
+            delta / retained_total,
+            inputs=[*inputs, opening.retained_earnings, closing.retained_earnings],
+        )
+
+    # 後備：淨利 − 股利。需要現金流量表的配息數字。
+    retained_total = 0.0
     # 最後一年的保留盈餘還來不及貢獻該年度獲利，故不計入分母。
     for income in incomes[:-1]:
         net_income = income.net_income

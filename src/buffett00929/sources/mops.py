@@ -119,8 +119,22 @@ BALANCE_COLUMNS: dict[str, tuple[str, ...]] = {
     "total_equity": ("權益總計", "權益總額"),
     "current_assets": ("流動資產",),
     "current_liabilities": ("流動負債",),
+    # 一般業的彙總資產負債表沒有現金欄，改由現金流量表的期末餘額回填。
     "cash": ("現金及約當現金",),
+    "retained_earnings": ("保留盈餘", "保留盈餘（或累積虧損）"),
+    "book_value_per_share": ("每股參考淨值",),
 }
+
+# 「股本」是**金額**不是股數，換算需要面額。
+SHARE_CAPITAL = ("股本",)
+PAR_VALUE = 10.0
+"""台灣上市櫃普通股面額多為 10 元，但**並非一律如此**，故換算後必須驗算。"""
+
+SHARE_COUNT_TOLERANCE = 0.05
+"""兩路股數估計的容許差距。超過就代表面額假設不成立。"""
+
+PER_SHARE_FIELDS = frozenset({"book_value_per_share"})
+"""每股數值不換算仟元——與 income 的 eps 同一個規則。"""
 
 # 權益優先取歸屬於母公司業主的部分，理由同上。三種業別寫法都不一樣。
 EQUITY_PARENT = (
@@ -132,6 +146,9 @@ EQUITY_PARENT = (
 CASHFLOW_COLUMNS: dict[str, tuple[str, ...]] = {
     "operating_cash_flow": ("營業活動之淨現金流入(流出)", "營業活動之現金流量"),
 }
+
+# 一般業的資產負債表沒有現金欄，但現金流量表有期末餘額——同一個數字。
+ENDING_CASH = ("期末現金及約當現金餘額",)
 
 REPORTS = {
     "income": ("t163sb04", "綜合損益表"),
@@ -172,6 +189,40 @@ def _column_index(header: list[str], candidates: Iterable[str]) -> int | None:
             return normalized.index(target)
     return None
 
+
+
+def _share_count(
+    share_capital: DataPoint, equity: DataPoint, book_value_per_share: DataPoint
+) -> DataPoint:
+    """由股本推算在外流通股數，並以每股淨值交叉驗算。
+
+    台灣的「股本」是**金額**不是股數，換算要除以面額。面額多為 10 元，
+    但並非一律如此——直接假設會算出錯的股數，而錯的股數會讓「股本稀釋」
+    這個指標無聲地給出錯誤結論，比缺料更糟。
+
+    因此另外用 ``權益 ÷ 每股淨值`` 算第二個估計值：這條路徑與面額無關。
+    兩者相差超過容忍值就代表面額假設不成立，回傳缺料。
+    每股淨值本身有四捨五入，所以容忍值不能太緊。
+    """
+    if not share_capital.is_available or share_capital.value in (None, 0):
+        return DataPoint.missing("MOPS 彙總報表未提供股本，無法推算在外流通股數")
+
+    by_par = share_capital.value / PAR_VALUE  # type: ignore[operator]
+
+    if (
+        equity.is_available
+        and book_value_per_share.is_available
+        and book_value_per_share.value not in (None, 0)
+    ):
+        by_book = equity.value / book_value_per_share.value  # type: ignore[operator]
+        if by_book > 0 and abs(by_par - by_book) / by_book > SHARE_COUNT_TOLERANCE:
+            return DataPoint.missing(
+                f"股本 ÷ 面額 {PAR_VALUE:g} 元推得 {by_par:,.0f} 股，"
+                f"但權益 ÷ 每股淨值推得 {by_book:,.0f} 股，"
+                "差距過大（面額可能非 10 元），不採用推估股數"
+            )
+
+    return DataPoint.derived(by_par, inputs=[share_capital])
 
 @dataclass
 class MopsClient:
@@ -288,11 +339,14 @@ class MopsClient:
         for header, row in scan_rows(html):
             sheet = BalanceSheet(period=period)
             for field_name, candidates in BALANCE_COLUMNS.items():
+                # 每股數值本來就是元，跟著乘一千會變成荒謬的每股淨值，
+                # 而且會讓股數的交叉驗算永遠不通過（同 EPS 的處理）。
+                scale = 1.0 if field_name in PER_SHARE_FIELDS else THOUSAND
                 setattr(
                     sheet,
                     field_name,
                     self._point(
-                        header, row, candidates, provenance, scale=THOUSAND, label=field_name
+                        header, row, candidates, provenance, scale=scale, label=field_name
                     ),
                 )
             parent_equity = self._point(
@@ -301,6 +355,13 @@ class MopsClient:
             )
             if parent_equity.is_available:
                 sheet.total_equity = parent_equity
+
+            share_capital = self._point(
+                header, row, SHARE_CAPITAL, provenance, scale=THOUSAND, label="股本",
+            )
+            sheet.shares_outstanding = _share_count(
+                share_capital, sheet.total_equity, sheet.book_value_per_share
+            )
             out[row[0]] = sheet
         return out
 
@@ -314,6 +375,10 @@ class MopsClient:
             statement.operating_cash_flow = self._point(
                 header, row, CASHFLOW_COLUMNS["operating_cash_flow"], provenance,
                 scale=THOUSAND, label="營業活動淨現金流",
+            )
+            statement.ending_cash = self._point(
+                header, row, ENDING_CASH, provenance,
+                scale=THOUSAND, label="期末現金及約當現金餘額",
             )
             # 彙總報表沒有資本支出明細——標示缺料，不用投資活動淨額冒充。
             statement.capex = DataPoint.missing(

@@ -443,6 +443,10 @@ class BalanceSheet:
     short_term_debt: DataPoint = field(default_factory=_mp)
     long_term_debt: DataPoint = field(default_factory=_mp)
     shares_outstanding: DataPoint = field(default_factory=_mp)
+    retained_earnings: DataPoint = field(default_factory=_mp)
+    """保留盈餘餘額。期間累計保留盈餘＝期末 − 期初，不必回推股利。"""
+    book_value_per_share: DataPoint = field(default_factory=_mp)
+    """每股淨值。用於驗算股數（與面額無關），不作為估值方法。"""
 
     @property
     def debt_ratio(self) -> DataPoint:
@@ -479,6 +483,8 @@ class CashFlowStatement:
     """資本支出，一律存為正數（流出金額）。"""
     dividends_paid: DataPoint = field(default_factory=_mp)
     depreciation: DataPoint = field(default_factory=_mp)
+    ending_cash: DataPoint = field(default_factory=_mp)
+    """期末現金及約當現金餘額。一般業的彙總資產負債表沒有現金欄，由此回填。"""
 
     @property
     def free_cash_flow(self) -> DataPoint:

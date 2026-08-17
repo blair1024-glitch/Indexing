@@ -170,3 +170,94 @@ class TestQuarterlyLevelStillAligns:
         q2 = next(f for f in company.cash_flows if f.period == FiscalPeriod(2020, 2))
         assert q2.capex.value == pytest.approx(60.0)
         assert "MOPS" in (q2.operating_cash_flow.provenance.source or "")
+
+
+class TestRetainedEarningsPath:
+    """盈餘再投資報酬先前只能靠「淨利 − 現金流量表的股利」算，
+    而官方彙總報表**有保留盈餘餘額、沒有股利支付金額**，
+    所以沒有第三方資料時整項指標永遠算不出來。餘額差額就是答案。"""
+
+    def _company(self):
+        from buffett00929.models import BalanceSheet, Company, IncomeStatement
+
+        company = Company(stock_id="2330", name="台積電")
+        company.income_statements = [
+            IncomeStatement(period=FiscalPeriod(y, 0), net_income=point(ni, "MOPS"))
+            for y, ni in ((2021, 100.0), (2022, 120.0), (2023, 150.0))
+        ]
+        company.balance_sheets = [
+            BalanceSheet(period=FiscalPeriod(y, 0), retained_earnings=point(re, "MOPS"))
+            for y, re in ((2021, 1000.0), (2022, 1060.0), (2023, 1150.0))
+        ]
+        return company
+
+    def test_computed_from_balances_without_any_dividend_data(self):
+        from buffett00929.metrics import reinvestment_return
+
+        company = self._company()
+        assert not company.cash_flows  # 完全沒有現金流量表
+        result = reinvestment_return(company, years=5)
+        # 淨利成長 150 − 100 = 50；累計保留盈餘 1150 − 1000 = 150
+        assert result.value == pytest.approx(50 / 150)
+
+    def test_falls_back_when_balances_lack_retained_earnings(self):
+        """餘額缺漏時仍走原本的「淨利 − 股利」路徑，而不是直接放棄。"""
+        from buffett00929.metrics import reinvestment_return
+        from buffett00929.models import CashFlowStatement, DataPoint
+
+        company = self._company()
+        for sheet in company.balance_sheets:
+            sheet.retained_earnings = DataPoint.missing("測試：無保留盈餘")
+        company.cash_flows = [
+            CashFlowStatement(period=FiscalPeriod(y, 0), dividends_paid=point(-40.0, "FinMind"))
+            for y in (2021, 2022, 2023)
+        ]
+        result = reinvestment_return(company, years=5)
+        # 分母＝(100−40)+(120−40)=140，分子 50
+        assert result.value == pytest.approx(50 / 140)
+
+    def test_non_positive_retained_earnings_is_meaningless(self):
+        from buffett00929.metrics import reinvestment_return
+
+        company = self._company()
+        company.balance_sheets[-1].retained_earnings = point(900.0, "MOPS")
+        assert not reinvestment_return(company, years=5).is_available
+
+
+class TestCashBackfill:
+    """一般業的彙總資產負債表沒有現金欄，但現金流量表有期末餘額。"""
+
+    def test_cash_is_backfilled_from_the_cash_flow_statement(self, loader):
+        from buffett00929.models import BalanceSheet, CashFlowStatement, Company
+        from buffett00929.sources.mops import MopsHistory
+
+        history = MopsHistory()
+        history.add("balance", {"2330": BalanceSheet(period=FY2020)})
+        history.add(
+            "cashflow",
+            {"2330": CashFlowStatement(period=FY2020, ending_cash=point(650.0, "MOPS"))},
+        )
+        loader.history = history
+
+        company = Company(stock_id="2330", name="台積電")
+        assert loader._load_from_mops(company)
+        assert company.balance_sheets[0].cash.value == pytest.approx(650.0)
+
+    def test_an_existing_cash_figure_is_not_overwritten(self, loader):
+        from buffett00929.models import BalanceSheet, CashFlowStatement, Company
+        from buffett00929.sources.mops import MopsHistory
+
+        history = MopsHistory()
+        history.add(
+            "balance",
+            {"2330": BalanceSheet(period=FY2020, cash=point(111.0, "MOPS 資產負債表"))},
+        )
+        history.add(
+            "cashflow",
+            {"2330": CashFlowStatement(period=FY2020, ending_cash=point(650.0, "MOPS"))},
+        )
+        loader.history = history
+
+        company = Company(stock_id="2330", name="台積電")
+        loader._load_from_mops(company)
+        assert company.balance_sheets[0].cash.value == pytest.approx(111.0)

@@ -346,3 +346,68 @@ class TestSourcePriority:
         merged = self._merge(existing, incoming, overwrite=False)
         assert [s.period for s in merged] == sorted(s.period for s in merged)
         assert len(merged) == 2
+
+
+BALANCE_WITH_CAPITAL = """
+<table><tr><td><table>
+  <tr>
+    <td>公司代號</td><td>公司名稱</td><td>資產總計</td><td>負債總計</td>
+    <td>股本</td><td>保留盈餘</td>
+    <td>歸屬於母公司業主之權益合計</td><td>權益總計</td><td>每股參考淨值</td>
+  </tr>
+  <tr>
+    <td>2330</td><td>台積電</td><td>3,000,000</td><td>1,000,000</td>
+    <td>10,000</td><td>1,500,000</td>
+    <td>2,000,000</td><td>2,000,000</td><td>2000.00</td>
+  </tr>
+  <tr>
+    <td>9999</td><td>面額五元</td><td>3,000,000</td><td>1,000,000</td>
+    <td>10,000</td><td>500,000</td>
+    <td>2,000,000</td><td>2,000,000</td><td>1000.00</td>
+  </tr>
+</table></td></tr></table>
+"""
+
+CASHFLOW_WITH_ENDING = """
+<table><tr><td><table>
+  <tr>
+    <td>公司代號</td><td>公司名稱</td><td>營業活動之淨現金流入（流出）</td>
+    <td>期初現金及約當現金餘額</td><td>期末現金及約當現金餘額</td>
+  </tr>
+  <tr>
+    <td>2330</td><td>台積電</td><td>700,000</td><td>400,000</td><td>650,000</td>
+  </tr>
+</table></td></tr></table>
+"""
+
+
+class TestShareCount:
+    """「股本」是金額不是股數，換算要除以面額。面額並非一律 10 元，
+    算錯的股數會讓「股本稀釋」無聲地給出錯誤結論——比缺料更糟。"""
+
+    def test_derived_from_share_capital_at_par(self, client):
+        # 股本 10,000 仟元 = 10,000,000 元 ÷ 面額 10 = 1,000,000 股
+        # 驗算：權益 2,000,000 仟元 ÷ 每股淨值 2,000 = 1,000,000 股 ✓
+        parsed = client.parse_balance(BALANCE_WITH_CAPITAL, Q1, TODAY)
+        assert parsed["2330"].shares_outstanding.value == pytest.approx(1_000_000)
+
+    def test_disagreeing_cross_check_reports_missing_not_a_wrong_count(self, client):
+        """每股淨值推得 2,000,000 股，面額法推得 1,000,000 股——面額不是 10 元。"""
+        parsed = client.parse_balance(BALANCE_WITH_CAPITAL, Q1, TODAY)
+        shares = parsed["9999"].shares_outstanding
+        assert not shares.is_available
+        assert "面額" in (shares.unavailable_reason or "")
+
+    def test_absent_share_capital_is_missing(self, client):
+        parsed = client.parse_balance(BALANCE_HTML, Q1, TODAY)
+        assert not parsed["2330"].shares_outstanding.is_available
+
+
+class TestRetainedEarningsAndCash:
+    def test_retained_earnings_balance_is_parsed(self, client):
+        parsed = client.parse_balance(BALANCE_WITH_CAPITAL, Q1, TODAY)
+        assert parsed["2330"].retained_earnings.value == pytest.approx(1_500_000 * 1000)
+
+    def test_ending_cash_is_parsed_from_the_cash_flow_statement(self, client):
+        parsed = client.parse_cashflow(CASHFLOW_WITH_ENDING, Q1, TODAY)
+        assert parsed["2330"].ending_cash.value == pytest.approx(650_000 * 1000)

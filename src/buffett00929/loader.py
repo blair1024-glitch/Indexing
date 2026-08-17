@@ -181,6 +181,17 @@ class DataLoader:
         company.income_statements = list(incomes)
         company.balance_sheets = list(balances)
         company.cash_flows = list(flows)
+
+        # 一般業的彙總資產負債表沒有現金欄，但現金流量表有期末餘額——
+        # 同一個時點的同一個數字，回填即可，不需要額外請求。
+        ending = {f.period: f.ending_cash for f in company.cash_flows}
+        for sheet in company.balance_sheets:
+            if sheet.cash.is_available:
+                continue
+            cash = ending.get(sheet.period)
+            if cash is not None and cash.is_available:
+                sheet.cash = cash
+
         return True
 
     def _load_history(self, company: Company, *, fill_only: bool = False) -> None:
@@ -355,9 +366,13 @@ class DataLoader:
 
         self.warnings.extend(self.mops.warnings)
         if self.mops.schema_watch.has_issues:
+            # 只報數量等於沒報：讀者無從判斷是業別差異還是對應寫錯，
+            # 而後者曾經真的發生過（全形括號害整批欄位對不上）。
+            # 因此列出欄位，並直接講出真正該講的那句話——有沒有影響到成分股。
+            fields = self.mops.schema_watch.unknown_fields
             self.warnings.append(
-                f"MOPS 彙總報表有 {len(self.mops.schema_watch.unknown_fields)} 個欄位對不上；"
-                "部分為業別差異（金融業沒有營業成本），詳見報表的資料來源說明"
+                f"MOPS 彙總報表有 {len(fields)} 個欄位對不上："
+                + "；".join(fields)
             )
 
     def load_all(self, constituents: ConstituentSet) -> list[LoadedCompany]:
