@@ -533,6 +533,33 @@ class TestShareCount:
         assert not unverifiable.is_available, "驗不到的期別不得沿用股本推估值"
         assert "基準" in (unverifiable.unavailable_reason or "")
 
+    def test_consolidated_net_income_is_not_divided_by_a_parent_only_eps(self, client):
+        """沒有母公司欄時，本期淨利含非控制權益，EPS 只算母公司——不能相除。
+
+        1104 該期的本期淨利 17.0 億含少數股東，EPS 2.00 元只算母公司。
+        相除得 850,000,000 股，比正確的 701,385,000 股高 21%，而且**只有
+        缺母公司欄的期別會被放大**——序列就此中途換基準，年化成長率
+        再把換基準算成稀釋。這是第 2 輪修正自己種下的缺陷。
+        """
+        history = MopsHistory()
+        history.add("balance", client.parse_balance(BALANCE_WITH_CAPITAL, Q3, TODAY))
+        history.add("income", client.parse_income(INCOME_WITHOUT_PARENT_COLUMN, Q3, TODAY))
+        client.reconcile_share_counts(history)
+
+        shares = history.balances["1104"][Q3].shares_outstanding
+        assert not shares.is_available, "缺母公司欄時盈餘路徑不得表態"
+
+    def test_the_parent_column_is_what_makes_the_earnings_path_usable(self, client):
+        """有母公司欄就照常修正——這道防線不能把正常的那條路也關掉。"""
+        history = MopsHistory()
+        history.add("balance", client.parse_balance(BALANCE_WITH_CAPITAL, Q1, TODAY))
+        history.add("income", client.parse_income(INCOME_FOR_SHARE_COUNT, Q1, TODAY))
+        client.reconcile_share_counts(history)
+
+        shares = history.balances["1104"][Q1].shares_outstanding
+        assert shares.is_available
+        assert shares.value == pytest.approx(701_385_000, rel=0.01)
+
     def test_a_company_that_never_needed_correction_keeps_every_period(self, client):
         """沒問題的公司不受影響——這道規則不能把正常序列打出洞來。"""
         history = MopsHistory()
