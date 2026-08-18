@@ -402,6 +402,17 @@ class TestShareCount:
         parsed = client.parse_balance(BALANCE_HTML, Q1, TODAY)
         assert not parsed["2330"].shares_outstanding.is_available
 
+    def test_a_rejected_share_count_is_recorded_not_silently_dropped(self, client):
+        """退件是對的，但退完會沉默地回退到 FinMind 的股本——那條路徑沒有驗算。
+
+        8070／6548 的 DCF 就是用了那個沒人驗過的股數，算出每股 368 元、
+        股價 49.5 元、安全邊際 +76%。所以退件必須留下痕跡。
+        """
+        client.parse_balance(BALANCE_WITH_CAPITAL, Q1, TODAY)
+        assert "9999" in client.share_count_rejections
+        assert "2330" not in client.share_count_rejections
+        assert str(Q1) in client.share_count_rejections["9999"]
+
 
 class TestRetainedEarningsAndCash:
     def test_retained_earnings_balance_is_parsed(self, client):

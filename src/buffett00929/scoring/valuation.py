@@ -97,10 +97,26 @@ class Valuation:
 # --------------------------------------------------------------------------
 
 
-def share_count(company: Company) -> DataPoint:
-    """最新年度的在外流通股數。
+SHARE_COUNT_TOLERANCE = 0.05
+"""股數與「權益 ÷ 每股淨值」的容忍差距。每股淨值本身有四捨五入，不能抓太緊。"""
+
+
+def share_count(company: Company, config: dict | None = None) -> DataPoint:
+    """最新年度的在外流通股數，並以每股淨值交叉驗算。
 
     股本→股數的換算已在來源層完成（見模組說明），這裡直接取用。
+
+    但**取用前必須驗算**。``sources/mops.py`` 對 MOPS 的股本做了
+    「股本 ÷ 面額」對「權益 ÷ 每股淨值」的交叉檢查，FinMind 那條路徑卻沒有；
+    而 FinMind 缺料或數字對不上時，這裡拿到的就是一個沒人驗過的股數。
+    股數錯不會讓任何一步報錯，只會讓 DCF 的每股價值等比例放大——
+    長華電材（8070）因此算出每股 368 元、股價 49.5 元、安全邊際 +76%，
+    登上「最便宜」榜首；反推它隱含的每股自由現金流是 29.3 元，
+    也就是 59% 的自由現金流殖利率，而同一份報表的現金股利只有 2.46 元。
+    兩者不可能同時為真——差的就是股數。
+
+    ``權益 ÷ 每股淨值``這條路徑與面額、與資料來源都無關，是獨立的第二意見。
+    兩者對不上時回缺料：寧可讓 DCF 消失，也不要發布一個等比例錯誤的內在價值。
     """
     balance = company.latest_annual_balance
     if balance is None or not balance.shares_outstanding.is_available:
@@ -108,6 +124,25 @@ def share_count(company: Company) -> DataPoint:
     shares = balance.shares_outstanding
     if shares.value is None or shares.value <= 0:
         return DataPoint.missing("在外流通股數 ≤ 0，無法計算每股價值")
+
+    tolerance = float((config or {}).get("share_count_tolerance", SHARE_COUNT_TOLERANCE))
+    equity = balance.total_equity
+    bvps = balance.book_value_per_share
+    if (
+        equity.is_available
+        and equity.value is not None
+        and bvps.is_available
+        and bvps.value not in (None, 0)
+    ):
+        by_book = equity.value / bvps.value  # type: ignore[operator]
+        if by_book > 0 and abs(shares.value - by_book) / by_book > tolerance:
+            return DataPoint.missing(
+                f"在外流通股數 {shares.value:,.0f} 股，"
+                f"但權益 ÷ 每股淨值推得 {by_book:,.0f} 股，"
+                f"差距 {abs(shares.value - by_book) / by_book:.0%} 超過容忍值 "
+                f"{tolerance:.0%}，股數與財報不在同一基準，不用於每股估值"
+            )
+
     return shares
 
 
@@ -311,13 +346,15 @@ def _method_dcf(company: Company, config: dict) -> ValuationMethod:
             value_per_share=DataPoint.missing("基期自由現金流 ≤ 0，DCF 無意義"),
         )
 
-    shares = share_count(company)
+    shares = share_count(company, config)
     if not shares.is_available or shares.value is None:
         return ValuationMethod(
             key="dcf",
             label="自由現金流折現（DCF）",
             value_per_share=DataPoint.missing(shares.unavailable_reason or "缺股數，無法計算每股價值"),
         )
+    balance = company.latest_annual_balance
+    share_period = str(balance.period) if balance is not None else "期別不明"
 
     growth_point = stability.eps_cagr(company)
     growth = 0.0
@@ -346,7 +383,8 @@ def _method_dcf(company: Company, config: dict) -> ValuationMethod:
         value_per_share=DataPoint.derived(present_value / shares.value, inputs=[*recent, shares]),
         assumptions=(
             f"基期 FCF {base_fcf / 1e8:.1f} 億元、成長 {growth:.1%}／年（{years} 年）、"
-            f"折現率 {discount:.1%}、永續成長 {terminal_growth:.1%}"
+            f"折現率 {discount:.1%}、永續成長 {terminal_growth:.1%}、"
+            f"股數 {shares.value / 1e8:.2f} 億股（{share_period}）"
         ),
     )
 
@@ -422,16 +460,34 @@ def estimate_valuation(company: Company, scoring_config: dict) -> Valuation:
 
     values = [m.value_per_share.value for m in available]
     median_value = statistics.median(values)  # type: ignore[arg-type]
-    valuation.intrinsic_value = DataPoint.derived(
-        median_value, inputs=[m.value_per_share for m in available]
-    )
 
     # 離散度：各方法相對中位數的最大偏離幅度。分歧過大代表估值本身不可靠。
+    spread: float | None = None
     if median_value > 0:
         spread = max(abs(v - median_value) / median_value for v in values)  # type: ignore[operator]
         valuation.dispersion = DataPoint.derived(spread, inputs=[])
-        threshold = float(mos_config.get("valuation", {}).get("dispersion_warning", 0.40))
-        valuation.dispersion_warning = spread > threshold
+        warn_at = float(config.get("dispersion_warning", 0.40))
+        valuation.dispersion_warning = spread > warn_at
+
+    # 規格第三節要的是「至少 2 種方法**交叉驗證**」。兩種方法差 7 倍不是交叉驗證，
+    # 是把一個答案和一個非答案取平均——中位數落在兩者之間，看起來很有信心，
+    # 實際上沒有任何一種方法支持它。實例：長華電材（8070）殖利率法 49.1 元、
+    # DCF 368.1 元，中位數 208.6 元對上 49.5 元股價，得出 +76% 安全邊際、
+    # 滿分 10/10、「最便宜」榜首；分歧 76% 當時只是一句沒人讀的註解。
+    reject_at = float(config.get("dispersion_reject", 0.60))
+    if spread is not None and spread > reject_at:
+        valuation.note = (
+            f"{len(available)} 種估值方法彼此分歧達 {spread:.0%}"
+            f"（超過 {reject_at:.0%} 門檻），未構成交叉驗證，"
+            "不計安全邊際分數（規格第三節要求 2 種方法交叉驗證）"
+        )
+        valuation.intrinsic_value = DataPoint.missing(valuation.note)
+        valuation.margin_of_safety = DataPoint.missing(valuation.note)
+        return valuation
+
+    valuation.intrinsic_value = DataPoint.derived(
+        median_value, inputs=[m.value_per_share for m in available]
+    )
 
     price = company.market_data.price
     if not price.is_available or price.value is None:

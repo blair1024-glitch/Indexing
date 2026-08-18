@@ -238,6 +238,13 @@ class MopsClient:
     config: dict = field(default_factory=dict)
     schema_watch: SchemaWatch = field(default_factory=lambda: SchemaWatch("MOPS 彙總報表"))
     warnings: list[str] = field(default_factory=list)
+    share_count_rejections: dict[str, str] = field(default_factory=dict)
+    """交叉驗算不通過而被退掉的股數，``{股號: 原因}``。
+
+    被退掉是對的——但**退掉之後會沉默地退回 FinMind 的股本**，而那條路徑沒有
+    任何驗算。8070／6548 的 DCF 因此用了一個沒人驗過的股數。所以退件本身
+    必須留下痕跡，讓下一次執行看得到是哪幾檔、差多少。
+    """
 
     @property
     def base_url(self) -> str:
@@ -368,6 +375,10 @@ class MopsClient:
             sheet.shares_outstanding = _share_count(
                 share_capital, sheet.total_equity, sheet.book_value_per_share
             )
+            if share_capital.is_available and not sheet.shares_outstanding.is_available:
+                self.share_count_rejections[row[0]] = (
+                    f"{period}：{sheet.shares_outstanding.unavailable_reason}"
+                )
             out[row[0]] = sheet
         return out
 
@@ -429,6 +440,15 @@ class MopsClient:
                             "（版面可能已變更）"
                         )
                     history.add(kind, parsed)
+
+        if self.share_count_rejections:
+            codes = sorted(self.share_count_rejections)
+            sample = self.share_count_rejections[codes[0]]
+            self.warnings.append(
+                f"MOPS 股數交叉驗算未通過 {len(codes)} 檔："
+                f"{'、'.join(codes)}。這些公司的股數改由 FinMind 股本推得，"
+                f"而該路徑無驗算，每股估值須留意。範例（{codes[0]}）：{sample}"
+            )
         return history
 
 
