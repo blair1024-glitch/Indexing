@@ -189,29 +189,40 @@ class ScoreChange:
     @property
     def explanation(self) -> str:
         """說明分數為什麼改變——歸因到實際變動的項目。"""
+        reasons: list[str] = []
+
         if self.basis_changed:
             # 分母不同時，各項目的差額多半只是重新配分的結果，
             # 拿來當理由會把「量到的方式變了」講成「公司變了」。
-            return (
+            # 但**紅旗與等級不受分母影響**，那是真的變化，必須照常講出來——
+            # 只講基準改變會把「新增重大紅旗」說成「非基本面變動」，
+            # 那比原本的過度歸因更糟。
+            reasons.append(
                 f"可評分滿分 {self.previous_scorable:.0f} → {self.current_scorable:.0f}"
-                "，衡量基準改變，總分不可直接比較（非基本面變動）"
+                "，總分不可直接比較"
             )
-
-        reasons: list[str] = []
+            reasons.extend(self._state_reasons())
+            return "；".join(reasons)
 
         moved = [d for d in self.component_deltas if d.delta and abs(d.delta) >= 0.5]
         moved.sort(key=lambda d: abs(d.delta or 0), reverse=True)
         for item in moved[:3]:
             reasons.append(f"{item.label} {item.delta:+.1f} 分")
 
+        reasons.extend(self._state_reasons())
+
+        return "；".join(reasons) if reasons else "各評分項目與紅旗狀態均無顯著變動"
+
+    def _state_reasons(self) -> list[str]:
+        """紅旗與等級的變化。這些是狀態不是分數，不受可評分分母影響。"""
+        reasons: list[str] = []
         if self.new_flags:
             reasons.append(f"新增紅旗：{'、'.join(self.new_flags)}")
         if self.resolved_flags:
             reasons.append(f"紅旗解除：{'、'.join(self.resolved_flags)}")
         if self.previous_grade and self.current_grade and self.previous_grade != self.current_grade:
             reasons.append(f"等級 {self.previous_grade} → {self.current_grade}")
-
-        return "；".join(reasons) if reasons else "各評分項目與紅旗狀態均無顯著變動"
+        return reasons
 
     @property
     def is_significant(self) -> bool:

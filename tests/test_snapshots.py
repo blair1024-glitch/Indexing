@@ -204,7 +204,7 @@ class TestMeasurementBasisChange:
             self._entry(score=66.9, scorable=85.0),
             self._entry(score=72.4, scorable=100.0),
         )
-        assert "衡量基準改變" in change.explanation
+        assert "總分不可直接比較" in change.explanation
         assert "85" in change.explanation and "100" in change.explanation
 
     def test_the_headline_is_marked(self):
@@ -222,7 +222,7 @@ class TestMeasurementBasisChange:
         )
         assert not change.basis_changed
         assert change.is_significant
-        assert "衡量基準" not in change.explanation
+        assert "不可直接比較" not in change.explanation
 
     def test_red_flags_are_reported_even_when_the_basis_moved(self):
         """紅旗是狀態不是分數，不受分母影響，絕不能被一起壓掉。"""
@@ -235,3 +235,6 @@ class TestMeasurementBasisChange:
         assert change.basis_changed
         assert change.is_significant
         assert change.new_flags
+        # 只講「基準改變」會把新增的重大紅旗說成「非基本面變動」，
+        # 比原本的過度歸因更糟。實際執行時 3702 就是這樣被誤標的。
+        assert "ROE 連續下降" in change.explanation

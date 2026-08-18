@@ -215,8 +215,9 @@ def _score_changes(run: AnalysisRun) -> str:
         parts.append(
             "<div class='card'><p class='warn'>⚠️ 本次有 "
             f"<strong>{run.basis_changed_count} 檔</strong>的可評分基準改變"
-            "（資料可得性變動使分母位移），這些公司的總分不可與上次直接比較，"
-            "因此不列為評分變化。</p></div>"
+            "（資料可得性變動使分母位移），其總分不可與上次直接比較，"
+            "分數位移本身不列為變化；但紅旗與等級不受分母影響，"
+            "若有變動仍會列在下方。</p></div>"
         )
 
     if not significant:
