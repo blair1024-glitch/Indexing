@@ -57,7 +57,14 @@ from ..models import (
     Provenance,
     utcnow,
 )
-from .base import FetchError, HttpClient, SchemaWatch, SourceUnavailable, parse_number
+from .base import (
+    PAR_VALUE,
+    FetchError,
+    HttpClient,
+    SchemaWatch,
+    SourceUnavailable,
+    parse_number,
+)
 from .periods import is_published, is_settled, periods_to_fetch, to_roc
 
 THOUSAND = 1000.0
@@ -127,8 +134,7 @@ BALANCE_COLUMNS: dict[str, tuple[str, ...]] = {
 
 # 「股本」是**金額**不是股數，換算需要面額。
 SHARE_CAPITAL = ("股本",)
-PAR_VALUE = 10.0
-"""台灣上市櫃普通股面額多為 10 元，但**並非一律如此**，故換算後必須驗算。"""
+"""面額由 base.PAR_VALUE 提供。並非所有公司都是 10 元，故換算後必須驗算。"""
 
 SHARE_COUNT_TOLERANCE = 0.05
 """兩路股數估計的容許差距。超過就代表面額假設不成立。"""

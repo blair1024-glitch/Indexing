@@ -310,3 +310,69 @@ class TestConstituentCoverageReport:
         loader.history = None
         loader._report_constituent_coverage(self._loaded(complete=False))
         assert not loader.warnings
+
+
+class TestShareCountUnitsAgreeAcrossSources:
+    """兩個來源都提供股數時，單位必須一致。
+
+    FinMind 的 OrdinaryShare／股本合計是**金額**，名字卻很像股數。
+    直接塞進 shares_outstanding，會讓同一條序列混入金額與股數，
+    年化成長率憑空變成 +74%～+105%——實測 50 檔裡 45 檔因此被標上
+    「大量增資稀釋股東」重大紅旗，整個 ETF 被誤判為 AVOID。
+    """
+
+    def test_finmind_share_capital_becomes_a_share_count(self):
+        from buffett00929.sources.base import PAR_VALUE, shares_from_share_capital
+
+        shares = shares_from_share_capital(point(10_000_000.0, "FinMind"))
+        assert shares.value == pytest.approx(10_000_000.0 / PAR_VALUE)
+
+    def test_both_sources_land_on_the_same_order_of_magnitude(self):
+        """同一家公司、同一筆股本，兩條路徑算出來的股數必須相同。"""
+        from buffett00929.sources.base import shares_from_share_capital
+        from buffett00929.sources.mops import MopsClient
+        from buffett00929.sources.base import HttpClient
+
+        capital_html = """
+        <table><tr><td><table>
+          <tr><td>公司代號</td><td>公司名稱</td><td>股本</td>
+              <td>權益總計</td><td>每股參考淨值</td></tr>
+          <tr><td>3702</td><td>大聯大</td><td>10,000</td>
+              <td>20,000</td><td>20.00</td></tr>
+        </table></td></tr></table>
+        """
+        mops = MopsClient(http=HttpClient(), config={})
+        by_mops = mops.parse_balance(capital_html, FY2020, date(2026, 8, 18))["3702"]
+        # MOPS 的股本是仟元：10,000 仟元 = 10,000,000 元 → 1,000,000 股
+        by_finmind = shares_from_share_capital(point(10_000_000.0, "FinMind"))
+
+        assert by_mops.shares_outstanding.value == pytest.approx(by_finmind.value)
+
+    def test_missing_share_capital_stays_missing(self):
+        from buffett00929.sources.base import shares_from_share_capital
+
+        assert not shares_from_share_capital(DataPoint.missing("無")).is_available
+
+    def test_finmind_balance_sheets_report_shares_not_the_capital_amount(self, monkeypatch):
+        """關鍵回歸：直接走 FinMind 的解析路徑。
+
+        OrdinaryShare 是股本金額。若它被原樣當成股數，這個測試就會看到
+        10,000,000 而不是 1,000,000——正是讓 45 檔被誤標稀釋的那個值。
+        """
+        from buffett00929.sources.base import HttpClient
+        from buffett00929.sources.finmind import FinMindClient
+
+        client = FinMindClient(
+            http=HttpClient(), config=Config.load().sources["finmind"], token="x"
+        )
+        monkeypatch.setattr(
+            client,
+            "fetch",
+            lambda *_a, **_k: [
+                {"date": "2020-12-31", "type": "OrdinaryShare", "value": 10_000_000.0},
+                {"date": "2020-12-31", "type": "TotalAssets", "value": 50_000_000.0},
+            ],
+        )
+
+        sheet = client.balance_sheets("3702")[0]
+        assert sheet.shares_outstanding.value == pytest.approx(1_000_000.0)

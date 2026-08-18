@@ -314,6 +314,23 @@ def make_point(
     )
 
 
+PAR_VALUE = 10.0
+"""台灣上市櫃普通股面額，多為 10 元。"""
+
+
+def shares_from_share_capital(share_capital: DataPoint) -> DataPoint:
+    """把「股本」換算成在外流通股數。
+
+    台灣財報的「股本」是**金額**不是股數，兩者差一個面額。
+    把金額直接當股數用不會報錯，只會讓股數莫名其妙變成十倍——
+    而如果同一條序列裡混了金額與股數，年化成長率就會憑空冒出 +74%，
+    觸發「大量增資稀釋股東」這種重大紅旗。實際發生過。
+    """
+    if not share_capital.is_available or share_capital.value in (None, 0):
+        return DataPoint.missing("缺股本，無法推算在外流通股數")
+    return DataPoint.derived(share_capital.value / PAR_VALUE, inputs=[share_capital])
+
+
 def roc_to_ad(roc_date: str) -> date | None:
     """民國年轉西元。例：``"1150817"`` 或 ``"115/08/17"`` → 2026-08-17。"""
     if not roc_date:
@@ -337,8 +354,10 @@ __all__ = [
     "HttpClient",
     "SchemaWatch",
     "SourceUnavailable",
+    "PAR_VALUE",
     "make_point",
     "parse_number",
     "pick",
     "roc_to_ad",
+    "shares_from_share_capital",
 ]
