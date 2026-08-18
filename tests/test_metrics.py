@@ -194,3 +194,79 @@ class TestDividend:
         result = dividend.high_yield_trap(company)
         assert not result.is_trap
         assert "缺殖利率" in result.note
+
+
+class TestDuPontAgreesWithTheReportedRoe:
+    """同一份報表不能出現兩個對不起來的 ROE。
+
+    杜邦拆解的用途是解釋「這個 ROE 是怎麼來的」，所以它必須拆解
+    **報表上那個 ROE**。先前它取「最新」資產負債表，而年中的資產負債表
+    會被 normalize 標成當年度的年度數，於是拿今年年中的權益去配去年的損益，
+    乘出來的 ROE 和明細表的年度 ROE 差了 0.5 個百分點。
+    """
+
+    def _company(self, *, with_partial_year: bool):
+        from buffett00929.metrics import roe as roe_metrics
+        from buffett00929.models import (
+            BalanceSheet,
+            Company,
+            DataPoint,
+            FiscalPeriod,
+            IncomeStatement,
+        )
+
+        def dp(value):
+            return DataPoint.of(value, "MOPS 彙總報表")
+
+        company = Company(stock_id="5269", name="祥碩科技")
+        company.income_statements = [
+            IncomeStatement(
+                period=FiscalPeriod(year, 0),
+                revenue=dp(revenue),
+                net_income=dp(net_income),
+            )
+            for year, revenue, net_income in ((2024, 900.0, 340.0), (2025, 1000.0, 400.0))
+        ]
+        company.balance_sheets = [
+            BalanceSheet(
+                period=FiscalPeriod(year, 0),
+                total_assets=dp(assets),
+                total_equity=dp(equity),
+            )
+            for year, assets, equity in ((2024, 2800.0, 2300.0), (2025, 3200.0, 2500.0))
+        ]
+        if with_partial_year:
+            # 2026 只過了半年，normalize 會把年中的資產負債表標成 2026 年度數。
+            company.balance_sheets.append(
+                BalanceSheet(
+                    period=FiscalPeriod(2026, 0),
+                    total_assets=dp(3600.0),
+                    total_equity=dp(2000.0),
+                )
+            )
+        return company, roe_metrics
+
+    def test_the_three_factors_multiply_back_to_the_reported_roe(self):
+        company, roe_metrics = self._company(with_partial_year=False)
+        decomposition = roe_metrics.dupont(company)
+        assert decomposition.roe.value == pytest.approx(roe_metrics.roe_latest(company).value)
+
+    def test_a_mid_year_balance_sheet_does_not_hijack_the_decomposition(self):
+        """關鍵回歸：多了一筆年中的 2026 資產負債表，答案不該改變。"""
+        company, roe_metrics = self._company(with_partial_year=True)
+        decomposition = roe_metrics.dupont(company)
+        assert decomposition.roe.value == pytest.approx(roe_metrics.roe_latest(company).value)
+
+    def test_equity_multiplier_uses_the_same_averaged_basis(self):
+        company, roe_metrics = self._company(with_partial_year=True)
+        decomposition = roe_metrics.dupont(company)
+        # 平均資產 (2800+3200)/2 = 3000，平均權益 (2300+2500)/2 = 2400
+        assert decomposition.equity_multiplier.value == pytest.approx(3000 / 2400)
+
+    def test_missing_same_year_balance_reports_insufficient_data(self):
+        """寧可標示資料不足，也不拿別的年度的資產負債表硬湊。"""
+        company, roe_metrics = self._company(with_partial_year=False)
+        company.balance_sheets = [b for b in company.balance_sheets if b.period.year != 2025]
+        decomposition = roe_metrics.dupont(company)
+        assert not decomposition.roe.is_available
+        assert "2025" in (decomposition.roe.unavailable_reason or "")

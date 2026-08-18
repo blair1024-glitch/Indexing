@@ -39,6 +39,16 @@ class DuPont:
         }
 
 
+def _average_with_prior(current: DataPoint, prior: DataPoint | None) -> DataPoint:
+    """期初期末平均。缺前一年就退回期末值。"""
+    if prior is not None and prior.is_available and current.is_available:
+        return DataPoint.derived(
+            (prior.value + current.value) / 2,  # type: ignore[operator]
+            inputs=[prior, current],
+        )
+    return current
+
+
 def annual_roe_series(company: Company) -> list[tuple[int, DataPoint]]:
     """逐年 ROE。
 
@@ -56,13 +66,9 @@ def annual_roe_series(company: Company) -> list[tuple[int, DataPoint]]:
             continue
 
         prior = balances.get(year - 1)
-        if prior is not None and prior.total_equity.is_available and balance.total_equity.is_available:
-            avg_equity = DataPoint.derived(
-                (prior.total_equity.value + balance.total_equity.value) / 2,  # type: ignore[operator]
-                inputs=[prior.total_equity, balance.total_equity],
-            )
-        else:
-            avg_equity = balance.total_equity
+        avg_equity = _average_with_prior(
+            balance.total_equity, prior.total_equity if prior else None
+        )
 
         # 權益為負時 ROE 無意義（負負得正會產生假性高 ROE）。
         if avg_equity.is_available and avg_equity.value is not None and avg_equity.value <= 0:
@@ -119,16 +125,39 @@ def latest_equity_multiplier(company: Company) -> DataPoint:
 
 
 def dupont(company: Company) -> DuPont:
-    """最新年度的杜邦拆解。"""
+    """最新年度的杜邦拆解。
+
+    三項必須拆解**報表上那個 ROE**，否則同一份報告會出現兩個對不起來的 ROE，
+    讀者無從判斷哪個才算數。因此這裡刻意與 ``annual_roe_series`` 用同一組基準：
+
+    * 損益表與資產負債表**取同一年度**——年中的資產負債表會被
+      ``normalize.to_annual_balances`` 標成當年度的年度數，
+      若直接取「最新」就會拿今年年中的權益去配去年的損益。
+    * 分母同樣採期初期末平均，且資產與權益用**同一種**基準，
+      三項相乘才會剛好等於 ``淨利 ÷ 平均權益``。
+    """
     income = company.latest_annual_income
-    balance = company.latest_annual_balance
-    if income is None or balance is None:
-        missing = DataPoint.missing("缺損益表或資產負債表，無法進行杜邦拆解")
+    if income is None:
+        missing = DataPoint.missing("缺年度損益表，無法進行杜邦拆解")
         return DuPont(missing, missing, missing, missing)
 
+    balances = {b.period.year: b for b in company.annual_balances()}
+    year = income.period.year
+    balance = balances.get(year)
+    if balance is None:
+        missing = DataPoint.missing(
+            f"{year} 年缺資產負債表，無法進行杜邦拆解"
+            "（不以其他年度的資產負債表替代）"
+        )
+        return DuPont(missing, missing, missing, missing)
+
+    prior = balances.get(year - 1)
+    avg_assets = _average_with_prior(balance.total_assets, prior.total_assets if prior else None)
+    avg_equity = _average_with_prior(balance.total_equity, prior.total_equity if prior else None)
+
     net_margin = income.net_margin
-    asset_turnover = safe_div(income.revenue, balance.total_assets, note="缺營收或總資產")
-    equity_multiplier = balance.equity_multiplier
+    asset_turnover = safe_div(income.revenue, avg_assets, note="缺營收或總資產")
+    equity_multiplier = safe_div(avg_assets, avg_equity, note="缺資產或股東權益")
 
     if all(p.is_available for p in (net_margin, asset_turnover, equity_multiplier)):
         roe = DataPoint.derived(

@@ -33,17 +33,30 @@ class SourceUnavailable(Exception):
 
 @dataclass
 class HttpClient:
-    """帶重試、退避與快取的 HTTP 客戶端。"""
+    """帶重試、退避、節流與快取的 HTTP 客戶端。"""
 
     timeout: float = 30.0
     max_retries: int = 3
     backoff: Sequence[float] = (2, 4, 8)
     user_agent: str = "buffett00929/0.1"
     cache: DiskCache | None = None
+    min_interval_seconds: float = 0.0
+    """兩次實際請求之間的最小間隔。回補十年歷史時必須節流，否則會被來源端擋。"""
     session: requests.Session = field(default_factory=requests.Session)
+    _last_request_at: float = field(default=0.0, init=False, repr=False)
 
     def __post_init__(self) -> None:
         self.session.headers.update({"User-Agent": self.user_agent})
+
+    def _throttle(self) -> None:
+        """命中快取不算一次請求——只有真的送出去才需要等。"""
+        if self.min_interval_seconds <= 0:
+            return
+        elapsed = time.monotonic() - self._last_request_at
+        remaining = self.min_interval_seconds - elapsed
+        if self._last_request_at and remaining > 0:
+            time.sleep(remaining)
+        self._last_request_at = time.monotonic()
 
     def get_json(
         self,
@@ -52,18 +65,136 @@ class HttpClient:
         headers: dict | None = None,
         *,
         use_cache: bool = True,
+        namespace: str | None = None,
+        immutable: bool = False,
     ) -> Any:
+        return self._request_json(
+            "GET",
+            url,
+            params=params,
+            headers=headers,
+            use_cache=use_cache,
+            namespace=namespace,
+            immutable=immutable,
+        )
+
+    def post_json(
+        self,
+        url: str,
+        body: dict | None = None,
+        headers: dict | None = None,
+        *,
+        use_cache: bool = True,
+        namespace: str | None = None,
+        immutable: bool = False,
+    ) -> Any:
+        """送出 JSON body 的 POST。
+
+        新版公開資訊觀測站是 SPA，查詢一律走 ``POST /mops/api/<code>`` 加 JSON body；
+        用 form-encoded 送會被拒。快取鍵沿用 body（等同 GET 的 params），
+        因為對這些端點而言 body 就是查詢條件。
+        """
+        return self._request_json(
+            "POST",
+            url,
+            params=body,
+            headers=headers,
+            use_cache=use_cache,
+            namespace=namespace,
+            immutable=immutable,
+        )
+
+    def post_form(
+        self,
+        url: str,
+        data: dict[str, str],
+        headers: dict | None = None,
+        *,
+        use_cache: bool = True,
+        namespace: str | None = None,
+        immutable: bool = False,
+        encoding: str = "utf-8",
+    ) -> str:
+        """送出 form-encoded POST 並回傳 HTML 文字。
+
+        公開資訊觀測站的彙總報表是舊式表單查詢，回應為 HTML 而非 JSON。
+        編碼一律指定而不交給 requests 猜：MOPS 沒有在標頭宣告 charset 時，
+        猜錯會讓整頁中文變成亂碼，然後解析器會「找不到欄位」——
+        那是最難查的一種失敗，因為它看起來像版面改版。
+        """
+        cache_key = {"_method": "POST_FORM", **data}
         if use_cache and self.cache:
-            entry = self.cache.get(url, params)
+            entry = self.cache.get(url, cache_key, namespace=namespace, immutable=immutable)
+            if entry is not None:
+                return str(entry.payload)
+
+        last_error: Exception | None = None
+        for attempt in range(self.max_retries):
+            self._throttle()
+            try:
+                response = self.session.post(
+                    url,
+                    data=data,
+                    headers={
+                        "Content-Type": "application/x-www-form-urlencoded",
+                        **(headers or {}),
+                    },
+                    timeout=self.timeout,
+                )
+            except requests.RequestException as exc:
+                last_error = exc
+            else:
+                if response.status_code == 200:
+                    response.encoding = encoding
+                    text = response.text
+                    if self.cache:
+                        self.cache.set(
+                            url, cache_key, text, namespace=namespace, immutable=immutable
+                        )
+                    return text
+
+                if 400 <= response.status_code < 500 and response.status_code != 429:
+                    raise FetchError(
+                        f"{url} 回傳 HTTP {response.status_code}"
+                        f"（不重試：用戶端錯誤）{response.text[:200]}"
+                    )
+                last_error = FetchError(f"{url} 回傳 HTTP {response.status_code}")
+
+            if attempt < self.max_retries - 1:
+                time.sleep(self.backoff[min(attempt, len(self.backoff) - 1)])
+
+        raise FetchError(f"{url} 重試 {self.max_retries} 次後仍失敗：{last_error}")
+
+    def _request_json(
+        self,
+        method: str,
+        url: str,
+        *,
+        params: dict | None,
+        headers: dict | None,
+        use_cache: bool,
+        namespace: str | None,
+        immutable: bool,
+    ) -> Any:
+        cache_key = {"_method": method, **(params or {})} if method != "GET" else params
+
+        if use_cache and self.cache:
+            entry = self.cache.get(url, cache_key, namespace=namespace, immutable=immutable)
             if entry is not None:
                 return entry.payload
 
         last_error: Exception | None = None
         for attempt in range(self.max_retries):
+            self._throttle()
             try:
-                response = self.session.get(
-                    url, params=params, headers=headers, timeout=self.timeout
-                )
+                if method == "GET":
+                    response = self.session.get(
+                        url, params=params, headers=headers, timeout=self.timeout
+                    )
+                else:
+                    response = self.session.post(
+                        url, json=params or {}, headers=headers, timeout=self.timeout
+                    )
             except requests.RequestException as exc:
                 last_error = exc
             else:
@@ -73,7 +204,9 @@ class HttpClient:
                     except ValueError as exc:
                         raise FetchError(f"{url} 回傳非 JSON 內容：{exc}") from exc
                     if self.cache:
-                        self.cache.set(url, params, payload)
+                        self.cache.set(
+                            url, cache_key, payload, namespace=namespace, immutable=immutable
+                        )
                     return payload
 
                 # 4xx（除 429）是請求本身的問題，重試沒有意義。
@@ -181,6 +314,23 @@ def make_point(
     )
 
 
+PAR_VALUE = 10.0
+"""台灣上市櫃普通股面額，多為 10 元。"""
+
+
+def shares_from_share_capital(share_capital: DataPoint) -> DataPoint:
+    """把「股本」換算成在外流通股數。
+
+    台灣財報的「股本」是**金額**不是股數，兩者差一個面額。
+    把金額直接當股數用不會報錯，只會讓股數莫名其妙變成十倍——
+    而如果同一條序列裡混了金額與股數，年化成長率就會憑空冒出 +74%，
+    觸發「大量增資稀釋股東」這種重大紅旗。實際發生過。
+    """
+    if not share_capital.is_available or share_capital.value in (None, 0):
+        return DataPoint.missing("缺股本，無法推算在外流通股數")
+    return DataPoint.derived(share_capital.value / PAR_VALUE, inputs=[share_capital])
+
+
 def roc_to_ad(roc_date: str) -> date | None:
     """民國年轉西元。例：``"1150817"`` 或 ``"115/08/17"`` → 2026-08-17。"""
     if not roc_date:
@@ -204,8 +354,10 @@ __all__ = [
     "HttpClient",
     "SchemaWatch",
     "SourceUnavailable",
+    "PAR_VALUE",
     "make_point",
     "parse_number",
     "pick",
     "roc_to_ad",
+    "shares_from_share_capital",
 ]

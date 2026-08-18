@@ -28,6 +28,10 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          # 完整歷史：commit 前要 fetch 遠端分支並把 HEAD 對齊過去（見下方），
+          # 淺層 clone 會讓那一步失敗。
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
@@ -36,6 +40,24 @@ jobs:
 
       - name: 安裝相依套件
         run: python -m pip install --quiet -e ".[dev]"
+
+      # 十年份的 MOPS 彙總報表約 110 MB，太大不適合進版控，
+      # 但每天重抓近百次 1.5 MB 的頁面既慢又對來源端不禮貌。
+      # 已定案的期別在快取層是永久有效的（見 sources/cache.py），
+      # 所以還原快取後只會抓新增的期別。
+      #
+      # 刻意拆成 restore / save 兩段：用單一 actions/cache 時，
+      # 儲存發生在 post 階段，**job 失敗就整個跳過**——
+      # 曾經因為最後的 commit 步驟失敗，把已經抓好的十年歷史全部作廢。
+      # 抓到的資料與後續步驟成敗無關，所以 save 用 if: always()。
+      - name: 還原財報歷史快取
+        id: history-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: data/raw
+          key: mops-history-${{ github.run_id }}
+          restore-keys: |
+            mops-history-
 
       - name: 驗證設定與指標實作一致
         run: make check
@@ -51,11 +73,31 @@ jobs:
           set -o pipefail
           make update 2>&1 | tee update.log
 
+      # 分析本身已經跑完，抓到的歷史不該因為後面的步驟失敗而丟掉。
+      - name: 保存財報歷史快取
+        if: always() && steps.history-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: data/raw
+          key: mops-history-${{ github.run_id }}
+
       - name: Commit 結果
+        env:
+          BRANCH: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # 分析要跑十分鐘以上，這段期間分支很可能已經被推了新的 commit。
+          # 直接 push 會被拒（non-fast-forward），整份結果就白算了。
+          #
+          # 把 HEAD 對齊遠端再重新 commit 產出物即可：--soft 只移動 HEAD，
+          # 工作目錄裡剛產生的檔案原封不動。產出物每次執行都是整份重新生成，
+          # 「最後一次執行說了算」正是正確語意，所以不需要 merge 或 rebase，
+          # 也不會有衝突。只 stage 產出物的路徑，其他檔案的差異不會被帶進 commit。
+          git fetch origin "$BRANCH"
+          git reset --soft "origin/$BRANCH"
           git add data/snapshots docs reports
 
           if git diff --cached --quiet; then
@@ -76,7 +118,27 @@ jobs:
           } > commit-message.txt
 
           git commit -F commit-message.txt
-          git push
+
+          # 上面的對齊只在 commit 當下成立；若正好有另一次推送插進來，
+          # 重新對齊後再試。產出物是整份重生的，重做這一步沒有副作用。
+          for attempt in 1 2 3; do
+            if git push origin "HEAD:$BRANCH"; then
+              exit 0
+            fi
+            echo "推送被拒（第 ${attempt} 次），重新對齊遠端後再試。"
+            sleep $((attempt * 3))
+            git fetch origin "$BRANCH"
+            git reset --soft "origin/$BRANCH"
+            git add data/snapshots docs reports
+            if git diff --cached --quiet; then
+              echo "重新對齊後已無差異（另一次執行寫入了相同結果）。"
+              exit 0
+            fi
+            git commit -F commit-message.txt
+          done
+
+          echo "::error::連續 3 次推送都被拒，請檢查是否有其他流程在寫同一個分支。"
+          exit 1
 
       - name: 保留執行紀錄
         if: always()

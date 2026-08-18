@@ -34,7 +34,13 @@ from ..models import (
     MonthlyRevenue,
     utcnow,
 )
-from .base import FetchError, HttpClient, SourceUnavailable, parse_number
+from .base import (
+    FetchError,
+    HttpClient,
+    SourceUnavailable,
+    parse_number,
+    shares_from_share_capital,
+)
 
 SOURCE = "FinMind"
 
@@ -117,7 +123,12 @@ BALANCE_FIELDS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
         ("LongTermBorrowings", "LongTermLoans", "BondsPayable", "NoncurrentLongTermBorrowings"),
         ("長期借款", "應付公司債"),
     ),
-    "shares_outstanding": (
+    # 注意：這些欄位是**股本金額**，不是股數。名稱（OrdinaryShare／股本合計）
+    # 很容易被當成股數直接塞進 shares_outstanding——實際發生過，
+    # 結果是 50 檔裡有 45 檔的股數年化成長率變成 +74%～+105%，
+    # 觸發「大量增資稀釋股東」重大紅旗，整個 ETF 被誤判為 AVOID。
+    # 因此存成 share_capital，換算成股數的動作集中在 balance_sheets()。
+    "share_capital": (
         ("OrdinaryShare", "CommonStock", "ShareCapitalCommonStock", "CapitalStock"),
         ("普通股股本", "股本合計"),
     ),
@@ -305,15 +316,17 @@ class FinMindClient:
             period = _period_from_date(report_date)
             if period is None:
                 continue
-            sheets.append(
-                BalanceSheet(
-                    period=period,
-                    **{
-                        key: fields.get(key, DataPoint.missing(f"FinMind 未提供 {key}"))
-                        for key in BALANCE_FIELDS
-                    },
-                )
+            values = {
+                key: fields.get(key, DataPoint.missing(f"FinMind 未提供 {key}"))
+                for key in BALANCE_FIELDS
+                if key != "share_capital"
+            }
+            # 股本是金額，除以面額才是股數。兩個來源的單位必須一致，
+            # 否則同一條序列裡混了金額與股數，年化成長率會憑空爆表。
+            values["shares_outstanding"] = shares_from_share_capital(
+                fields.get("share_capital", DataPoint.missing("FinMind 未提供股本"))
             )
+            sheets.append(BalanceSheet(period=period, **values))
         return sheets
 
     def cash_flows(self, stock_id: str) -> list[CashFlowStatement]:
@@ -413,6 +426,48 @@ class FinMindClient:
             if pe is not None and pe > 0:
                 values.append(pe)
         return values
+
+    def stock_directory(self) -> dict[str, dict[str, str]]:
+        """全市場股票總覽：代號 → 產業別與市場別。
+
+        一次請求涵蓋整個市場，因此不帶 ``data_id``（帶了只會拿到單一檔）。
+        回傳的 ``type`` 欄位是市場別（twse／tpex），比用「有沒有出現在
+        證交所收盤行情裡」推斷更直接可靠。
+        """
+        if not self.is_available:
+            raise SourceUnavailable(self.unavailable_reason)
+
+        self._throttle()
+        params = {"dataset": self._dataset("stock_info")}
+        try:
+            payload = self.http.get_json(
+                self.config["base_url"],
+                params=params,
+                headers={"Authorization": f"Bearer {self.token}"},
+            )
+        except FetchError as exc:
+            raise SourceUnavailable(f"FinMind 股票總覽取得失敗：{exc}") from exc
+
+        rows = payload.get("data") if isinstance(payload, dict) else None
+        if not isinstance(rows, list):
+            raise SourceUnavailable("FinMind 股票總覽回傳格式非預期")
+
+        directory: dict[str, dict[str, str]] = {}
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            stock_id = str(row.get("stock_id") or "").strip()
+            if not stock_id:
+                continue
+            # 同一代號可能有多筆（不同市場別），先到者為準。
+            directory.setdefault(
+                stock_id,
+                {
+                    "industry": str(row.get("industry_category") or "").strip(),
+                    "market": str(row.get("type") or "").strip(),
+                },
+            )
+        return directory
 
     def latest_price(self, stock_id: str) -> DataPoint:
         rows = self.fetch("price", stock_id, self.start_date())

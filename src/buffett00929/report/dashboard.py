@@ -113,6 +113,14 @@ def write_dashboard(run: AnalysisRun, repo_root: Path) -> Path:
     return path
 
 
+
+def _source_summary(run) -> str:
+    """本次執行實際命中的來源，由 provenance 反推（見 markdown._add_sources）。"""
+    sources = run.data_sources
+    if not sources:
+        return "無任何可用數據點"
+    return "、".join(f"{source}（{count:,}）" for source, count in sources)
+
 def render_dashboard(run: AnalysisRun) -> str:
     parts: list[str] = [
         "<!doctype html>",
@@ -155,7 +163,7 @@ def render_dashboard(run: AnalysisRun) -> str:
     add(
         "<p>資料來源：成分股名單 "
         f"{_esc(run.constituents.source)}（{run.constituents.as_of.isoformat()}）；"
-        "財報最新一期為證交所／櫃買中心 OpenAPI；多年度歷史為 FinMind。</p>"
+        f"財報與市場資料 {_esc(_source_summary(run))}。</p>"
     )
     add(
         "<p>缺料一律標示「資料不足」且不計入評分分母，不以推估值填補。"
@@ -202,6 +210,16 @@ def _etf_tiles(run: AnalysisRun) -> str:
 def _score_changes(run: AnalysisRun) -> str:
     parts = ["<h2>📈 評分變化</h2>"]
     significant = run.significant_changes
+
+    if run.basis_changed_count:
+        parts.append(
+            "<div class='card'><p class='warn'>⚠️ 本次有 "
+            f"<strong>{run.basis_changed_count} 檔</strong>的可評分基準改變"
+            "（資料可得性變動使分母位移），其總分不可與上次直接比較，"
+            "分數位移本身不列為變化；但紅旗與等級不受分母影響，"
+            "若有變動仍會列在下方。</p></div>"
+        )
+
     if not significant:
         parts.append(
             "<div class='card'><p class='empty'>與上次執行相比，沒有成分股出現顯著的評分變化。</p></div>"

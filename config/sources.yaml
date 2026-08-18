@@ -1,6 +1,12 @@
 # 資料來源設定（對應規格第十九節：優先官方來源）
 #
-# 優先序：官方（TWSE / TPEx / MOPS）> FinMind（歷史回補）。
+# 優先序：
+#   1. MOPS 彙總報表 — 官方，多年度歷史的骨幹（損益、資產負債、營業現金流）
+#   2. TWSE / TPEx OpenAPI — 官方，最新一期覆蓋同期數字與市場面資料
+#   3. FinMind — 第三方，只補前兩者沒有的細項（資本支出、股利、月營收、PE 序列）
+#
+# 「官方優先」指的是**同一欄位誰說了算**，不是誰整筆覆蓋誰：
+# 合併一律逐欄位進行，來源缺的欄位保留既有值，避免資料反而變少。
 # 每個數據點都會記錄實際命中的來源，報表上原樣顯示。
 
 # ---------------------------------------------------------------------------
@@ -10,19 +16,25 @@ constituents:
   etf_id: "00929"
   etf_name: "復華台灣科技優息 ETF"
   # 不寫死成分股檔數：以抓取結果為準（公開資料對 40/50 檔說法不一）。
+  # 註：證交所**沒有** ETF 成分股 API。已比對其 OpenAPI 全部 143 個端點，
+  # `成分`／`PCF`／`申購買回`／`holding`／`composition` 皆 0 筆命中。
+  # ETF 持股明細由發行投信自行公告，00929 即復華投信。
   providers:
-    - name: twse_pcf
-      enabled: true
-      description: 證交所 ETF 申購買回清單（PCF），官方每日揭露的實際持股籃
-      url: "https://www.twse.com.tw/rwd/zh/ETF/etfPCF"
-      params: {stkNo: "00929", response: json}
     - name: fuhwa_official
       enabled: true
-      description: 復華投信官網 00929 頁面
-      url: "https://www.fhtrust.com.tw/ETF/etf_detail/ETF21"
+      description: >
+        復華投信官方持股 API。官網頁面雖為 JS 渲染，但前端呼叫的是純 JSON 端點，
+        直接打該端點即可，不需瀏覽器自動化。
+      url: "https://www.fhtrust.com.tw/api/assets"
+      # 復華內部基金代號。expected_etf_id 用來驗證抓到的確實是 00929——
+      # 內部代號若變動，寧可報錯也不要默默分析錯的基金。
+      fund_id: "ETF21"
+      expected_etf_id: "00929"
+      # qDate 為必填且非交易日回空，需往前回溯到最近有資料的日期。
+      lookback_days: 10
     - name: manual
       enabled: true
-      description: 人工維護的名單，需填 as_of 日期；僅在官方來源皆失敗時使用
+      description: 人工維護的名單，需填 as_of 日期；僅在官方來源失敗時使用
       path: "data/manual/constituents.yaml"
   # 人工名單超過此天數即視為過期並拒絕使用（規格第二節：禁用過時資料）
   manual_max_age_days: 45
@@ -67,11 +79,31 @@ tpex:
   amount_multiplier: 1000
 
 # ---------------------------------------------------------------------------
-# FinMind（歷史回補）
+# 公開資訊觀測站彙總報表（官方、多年度歷史的主要來源）
+# ---------------------------------------------------------------------------
+# 實測（2026-08-17）：新版 MOPS（mops.twse.com.tw）是 SPA，舊路徑只回轉址殘骸；
+# **舊網域 mopsov.twse.com.tw 仍供應彙總報表**，查詢條件由新版前端的
+# chunk 定義（/mops/assets/t163sb04.js）反推：TYPEK / year（民國年）/ season。
+#
+# 一次請求＝該期別全市場（約 1060 家、1.5 MB），因此以期別為單位抓取，
+# 不逐檔查詢——逐檔是 50 檔 × 40 期 × 3 表 ≈ 6000 次請求，必定被擋。
+mops:
+  enabled: true
+  base_url: "https://mopsov.twse.com.tw"
+  # 年度數抓十年，季度數只抓最近兩年（見 sources/periods.py 的取捨說明）。
+  years: 10
+  # 回應大且慢（實測 1.7–15.9 秒），逾時要放寬。
+  timeout_seconds: 90
+  # 連打 6 次未見被擋或降速，仍保留間隔——回補近百次不該貼著上限打。
+  min_interval_seconds: 1.0
+
+# ---------------------------------------------------------------------------
+# FinMind（補彙總報表沒有的細項）
 # ---------------------------------------------------------------------------
 # 免費 token 於 https://finmindtrade.com 註冊後取得，設為環境變數 FINMIND_TOKEN。
-# 未設定時系統仍可執行，但所有需要多年歷史的指標（CAGR、5/10 年平均 ROE、
-# 毛利率趨勢、歷史 PE 分位）會標示「資料不足」而非給 0 分。
+# MOPS 彙總報表沒有資本支出、股利、月營收與歷史本益比，這些由 FinMind 補；
+# **只填空缺，不覆蓋官方數字**。未設定 token 時系統仍可執行，
+# 但 FCF、盈再率、殖利率與歷史 PE 分位會標示「資料不足」而非給 0 分。
 finmind:
   enabled: true
   base_url: "https://api.finmindtrade.com/api/v4/data"

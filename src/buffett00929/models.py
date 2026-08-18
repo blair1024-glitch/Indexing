@@ -17,7 +17,7 @@ import math
 import re
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timezone
-from typing import Iterable, Sequence
+from typing import Iterable, Iterator, Sequence
 
 # --------------------------------------------------------------------------
 # Provenance
@@ -443,6 +443,10 @@ class BalanceSheet:
     short_term_debt: DataPoint = field(default_factory=_mp)
     long_term_debt: DataPoint = field(default_factory=_mp)
     shares_outstanding: DataPoint = field(default_factory=_mp)
+    retained_earnings: DataPoint = field(default_factory=_mp)
+    """保留盈餘餘額。期間累計保留盈餘＝期末 − 期初，不必回推股利。"""
+    book_value_per_share: DataPoint = field(default_factory=_mp)
+    """每股淨值。用於驗算股數（與面額無關），不作為估值方法。"""
 
     @property
     def debt_ratio(self) -> DataPoint:
@@ -479,6 +483,8 @@ class CashFlowStatement:
     """資本支出，一律存為正數（流出金額）。"""
     dividends_paid: DataPoint = field(default_factory=_mp)
     depreciation: DataPoint = field(default_factory=_mp)
+    ending_cash: DataPoint = field(default_factory=_mp)
+    """期末現金及約當現金餘額。一般業的彙總資產負債表沒有現金欄，由此回填。"""
 
     @property
     def free_cash_flow(self) -> DataPoint:
@@ -545,6 +551,27 @@ class Company:
 
     data_gaps: list[str] = field(default_factory=list)
     """抓取過程中記錄的缺料項目，會原樣呈現在報表上。"""
+
+    def iter_data_points(self) -> Iterator[DataPoint]:
+        """走訪這家公司所有帶 provenance 的數據點。
+
+        報表的「資料來源」段落據此產生。列舉實際命中的來源，
+        而不是把設定檔裡的優先序抄一遍——來源換掉時，
+        寫死的說明會變成錯的，而且錯得很安靜（明細標 MOPS、總表卻說 FinMind）。
+        """
+        containers = (
+            *self.income_statements,
+            *self.balance_sheets,
+            *self.cash_flows,
+            *self.dividends,
+            *self.monthly_revenues,
+            self.market_data,
+            self,
+        )
+        for container in containers:
+            for value in vars(container).values():
+                if isinstance(value, DataPoint):
+                    yield value
 
     def __post_init__(self) -> None:
         self.income_statements.sort(key=lambda s: s.period)

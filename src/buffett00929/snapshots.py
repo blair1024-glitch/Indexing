@@ -140,6 +140,21 @@ class ScoreChange:
     resolved_flags: list[str] = field(default_factory=list)
     previous_grade: str | None = None
     current_grade: str | None = None
+    previous_scorable: float | None = None
+    current_scorable: float | None = None
+    """兩次執行的可評分滿分。不同就表示衡量基準變了，總分不能直接比。"""
+
+    @property
+    def basis_changed(self) -> bool:
+        """可評分分母是否改變。
+
+        分母會因為資料可得性而變動——補上一個來源、或某個來源當天被擋，
+        都會讓可評分滿分位移，總分跟著整體位移。那不是基本面變化，
+        把它當成變化來歸因會憑空製造一整批假訊號。
+        """
+        if self.previous_scorable is None or self.current_scorable is None:
+            return False
+        return abs(self.previous_scorable - self.current_scorable) > 0.01
 
     @property
     def delta(self) -> float | None:
@@ -165,9 +180,10 @@ class ScoreChange:
             return f"{self.name}：新增追蹤，{self.current_score:.0f} 分"
         if self.current_score is None:
             return f"{self.name}：本次無法評分"
+        marker = "（基準改變）" if self.basis_changed else ""
         return (
             f"{self.name}：{self.previous_score:.0f} → {self.current_score:.0f} "
-            f"{self.arrow}{abs(self.delta or 0):.0f}"
+            f"{self.arrow}{abs(self.delta or 0):.0f}{marker}"
         )
 
     @property
@@ -175,26 +191,48 @@ class ScoreChange:
         """說明分數為什麼改變——歸因到實際變動的項目。"""
         reasons: list[str] = []
 
+        if self.basis_changed:
+            # 分母不同時，各項目的差額多半只是重新配分的結果，
+            # 拿來當理由會把「量到的方式變了」講成「公司變了」。
+            # 但**紅旗與等級不受分母影響**，那是真的變化，必須照常講出來——
+            # 只講基準改變會把「新增重大紅旗」說成「非基本面變動」，
+            # 那比原本的過度歸因更糟。
+            reasons.append(
+                f"可評分滿分 {self.previous_scorable:.0f} → {self.current_scorable:.0f}"
+                "，總分不可直接比較"
+            )
+            reasons.extend(self._state_reasons())
+            return "；".join(reasons)
+
         moved = [d for d in self.component_deltas if d.delta and abs(d.delta) >= 0.5]
         moved.sort(key=lambda d: abs(d.delta or 0), reverse=True)
         for item in moved[:3]:
             reasons.append(f"{item.label} {item.delta:+.1f} 分")
 
+        reasons.extend(self._state_reasons())
+
+        return "；".join(reasons) if reasons else "各評分項目與紅旗狀態均無顯著變動"
+
+    def _state_reasons(self) -> list[str]:
+        """紅旗與等級的變化。這些是狀態不是分數，不受可評分分母影響。"""
+        reasons: list[str] = []
         if self.new_flags:
             reasons.append(f"新增紅旗：{'、'.join(self.new_flags)}")
         if self.resolved_flags:
             reasons.append(f"紅旗解除：{'、'.join(self.resolved_flags)}")
         if self.previous_grade and self.current_grade and self.previous_grade != self.current_grade:
             reasons.append(f"等級 {self.previous_grade} → {self.current_grade}")
-
-        return "；".join(reasons) if reasons else "各評分項目與紅旗狀態均無顯著變動"
+        return reasons
 
     @property
     def is_significant(self) -> bool:
+        """紅旗變化一律算數；純粹的分數位移則要求基準相同才算數。"""
+        if self.new_flags or self.resolved_flags:
+            return True
+        if self.basis_changed:
+            return False
         delta = self.delta
-        return bool(
-            (delta is not None and abs(delta) >= 1.0) or self.new_flags or self.resolved_flags
-        )
+        return delta is not None and abs(delta) >= 1.0
 
     def to_dict(self) -> dict:
         return {
@@ -210,6 +248,9 @@ class ScoreChange:
             "resolved_flags": self.resolved_flags,
             "previous_grade": self.previous_grade,
             "current_grade": self.current_grade,
+            "previous_scorable": self.previous_scorable,
+            "current_scorable": self.current_scorable,
+            "basis_changed": self.basis_changed,
         }
 
 
@@ -231,6 +272,8 @@ def diff_snapshots(current: Snapshot, previous: Snapshot | None) -> list[ScoreCh
             current_score=entry.get("total_score"),
             previous_grade=(before or {}).get("grade"),
             current_grade=entry.get("grade"),
+            previous_scorable=(before or {}).get("scorable_max"),
+            current_scorable=entry.get("scorable_max"),
         )
 
         if before:
