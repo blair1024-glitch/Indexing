@@ -133,7 +133,7 @@ def build_company(
                 short_term_debt=dp(debt * 0.4, str(period), year),
                 long_term_debt=dp(debt * 0.6, str(period), year),
                 # 台股財報的「普通股股本」是金額，面額 10 元。
-                shares_outstanding=dp(share_count * 10, str(period), year),
+                shares_outstanding=dp(share_count, str(period), year),
             )
         )
 

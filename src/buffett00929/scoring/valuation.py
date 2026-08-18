@@ -7,9 +7,11 @@
 **可用方法少於 2 種時不給安全邊際分數**——寧可標示資料不足，
 也不要用單一方法算出的價格當成「交叉驗證過」的結論。
 
-台股特有細節：``shares_outstanding`` 取自財報的「普通股股本」，單位是**金額**
-而非股數。台股面額通常為 10 元，故股數 = 股本 ÷ 面額。這個換算若省略，
-每股數字會差 10 倍。
+台股特有細節：財報的「股本」是**金額**不是股數，兩者差一個面額。
+換算集中在來源層（``sources/base.shares_from_share_capital``），
+``BalanceSheet.shares_outstanding`` 拿到手時**已經是股數**。
+這裡若再除一次面額，每股價值會憑空變成十倍——實際發生過：
+DCF 一度算出 13,921 元，而同一家公司的其他三種估值法都在 577～1,443 之間。
 """
 
 from __future__ import annotations
@@ -20,7 +22,6 @@ from dataclasses import dataclass, field
 from ..metrics import stability
 from ..models import Company, DataPoint
 
-DEFAULT_PAR_VALUE = 10.0
 """台股普通股面額，元。用於由股本換算股數。"""
 
 
@@ -96,15 +97,18 @@ class Valuation:
 # --------------------------------------------------------------------------
 
 
-def share_count(company: Company, par_value: float = DEFAULT_PAR_VALUE) -> DataPoint:
-    """由普通股股本換算流通股數：股數 = 股本 ÷ 面額。"""
+def share_count(company: Company) -> DataPoint:
+    """最新年度的在外流通股數。
+
+    股本→股數的換算已在來源層完成（見模組說明），這裡直接取用。
+    """
     balance = company.latest_annual_balance
     if balance is None or not balance.shares_outstanding.is_available:
-        return DataPoint.missing("缺普通股股本，無法換算流通股數")
-    capital = balance.shares_outstanding
-    if capital.value is None or capital.value <= 0:
-        return DataPoint.missing("普通股股本 ≤ 0，無法換算流通股數")
-    return DataPoint.derived(capital.value / par_value, inputs=[capital])
+        return DataPoint.missing("缺在外流通股數，無法計算每股價值")
+    shares = balance.shares_outstanding
+    if shares.value is None or shares.value <= 0:
+        return DataPoint.missing("在外流通股數 ≤ 0，無法計算每股價值")
+    return shares
 
 
 def normalized_eps(company: Company, years: int) -> DataPoint:
@@ -398,7 +402,6 @@ def estimate_valuation(company: Company, scoring_config: dict) -> Valuation:
 
 
 __all__ = [
-    "DEFAULT_PAR_VALUE",
     "Valuation",
     "ValuationMethod",
     "estimate_valuation",

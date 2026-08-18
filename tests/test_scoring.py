@@ -220,3 +220,50 @@ class TestOneLineConclusion:
         score = score_of(demo.build_company(eps_growth=-0.15, gross_margin_drift=-0.02))
         text = engine.one_line_conclusion(score, config)
         assert any(f.label in text for f in score.red_flags.triggered)
+
+
+class TestPerShareValuesUseAShareCount:
+    """股本→股數的換算只能做一次。
+
+    「股本」是金額，`shares_outstanding` 是股數，中間差一個面額。
+    來源層換算完之後，估值層若再除一次，每股價值就會變成十倍——
+    實際發生過：DCF 一度算出 13,921 元，而同一家公司的其他三種估值法
+    都落在 577～1,443。四種方法的中位數因此被整個抬高。
+    """
+
+    def _company(self, shares: float):
+        from buffett00929.models import BalanceSheet, Company, DataPoint, FiscalPeriod
+
+        company = Company(stock_id="2458", name="義隆電子")
+        company.balance_sheets = [
+            BalanceSheet(
+                period=FiscalPeriod(2025, 0),
+                total_assets=DataPoint.of(1e10, "MOPS"),
+                total_equity=DataPoint.of(8e9, "MOPS"),
+                shares_outstanding=DataPoint.of(shares, "MOPS"),
+            )
+        ]
+        return company
+
+    def test_share_count_is_returned_unchanged(self):
+        from buffett00929.scoring.valuation import share_count
+
+        company = self._company(306_000_000.0)
+        assert share_count(company).value == pytest.approx(306_000_000.0)
+
+    def test_a_second_par_division_would_be_caught(self):
+        """若有人再除一次面額，這個值會掉到 30,600,000。"""
+        from buffett00929.scoring.valuation import share_count
+
+        company = self._company(306_000_000.0)
+        assert share_count(company).value > 100_000_000
+
+    def test_missing_share_count_is_reported_not_guessed(self):
+        from buffett00929.models import DataPoint
+        from buffett00929.scoring.valuation import share_count
+
+        company = self._company(306_000_000.0)
+        company.balance_sheets[0].shares_outstanding = DataPoint.missing("無")
+        result = share_count(company)
+        assert not result.is_available
+        assert "股數" in (result.unavailable_reason or "")
