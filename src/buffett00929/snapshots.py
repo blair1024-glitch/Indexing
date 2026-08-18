@@ -140,6 +140,8 @@ class ScoreChange:
     resolved_flags: list[str] = field(default_factory=list)
     previous_grade: str | None = None
     current_grade: str | None = None
+    previous_verdict: str | None = None
+    current_verdict: str | None = None
     previous_scorable: float | None = None
     current_scorable: float | None = None
     """兩次執行的可評分滿分。不同就表示衡量基準變了，總分不能直接比。"""
@@ -222,12 +224,28 @@ class ScoreChange:
             reasons.append(f"紅旗解除：{'、'.join(self.resolved_flags)}")
         if self.previous_grade and self.current_grade and self.previous_grade != self.current_grade:
             reasons.append(f"等級 {self.previous_grade} → {self.current_grade}")
+        # 判斷是整份報表最可操作的一行，但它可能因為**停止衡量**而變動：
+        # 安全邊際變成資料不足時，估值門檻不再拘束，REDUCE 會升成 HOLD。
+        # 那不是公司變好，是我們不再知道價格合不合理——不寫出來，
+        # 讀者只會看到一次沒有理由的升級。
+        if (
+            self.previous_verdict
+            and self.current_verdict
+            and self.previous_verdict != self.current_verdict
+        ):
+            reasons.append(f"判斷 {self.previous_verdict} → {self.current_verdict}")
         return reasons
 
     @property
     def is_significant(self) -> bool:
-        """紅旗變化一律算數；純粹的分數位移則要求基準相同才算數。"""
+        """紅旗與判斷的變化一律算數；純粹的分數位移則要求基準相同才算數。"""
         if self.new_flags or self.resolved_flags:
+            return True
+        if (
+            self.previous_verdict
+            and self.current_verdict
+            and self.previous_verdict != self.current_verdict
+        ):
             return True
         if self.basis_changed:
             return False
@@ -248,6 +266,8 @@ class ScoreChange:
             "resolved_flags": self.resolved_flags,
             "previous_grade": self.previous_grade,
             "current_grade": self.current_grade,
+            "previous_verdict": self.previous_verdict,
+            "current_verdict": self.current_verdict,
             "previous_scorable": self.previous_scorable,
             "current_scorable": self.current_scorable,
             "basis_changed": self.basis_changed,
@@ -272,6 +292,8 @@ def diff_snapshots(current: Snapshot, previous: Snapshot | None) -> list[ScoreCh
             current_score=entry.get("total_score"),
             previous_grade=(before or {}).get("grade"),
             current_grade=entry.get("grade"),
+            previous_verdict=(before or {}).get("verdict"),
+            current_verdict=entry.get("verdict"),
             previous_scorable=(before or {}).get("scorable_max"),
             current_scorable=entry.get("scorable_max"),
         )

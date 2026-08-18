@@ -238,3 +238,55 @@ class TestMeasurementBasisChange:
         # 只講「基準改變」會把新增的重大紅旗說成「非基本面變動」，
         # 比原本的過度歸因更糟。實際執行時 3702 就是這樣被誤標的。
         assert "ROE 連續下降" in change.explanation
+
+
+class TestVerdictChangeIsReported:
+    """判斷是報表裡最可操作的一行，而它的變化原本完全看不見。
+
+    停止衡量估值會讓判斷從 REDUCE 升到 HOLD——不是因為公司變好，
+    而是因為安全邊際變成資料不足。等級變化會被報出來，判斷變化不會，
+    所以讀者只看得到「升級」，看不到升級的原因。
+    """
+
+    def _entry(self, *, verdict: str, scorable: float = 100.0) -> dict:
+        return {
+            "stock_id": "4904",
+            "name": "遠傳電信",
+            "total_score": 70.2,
+            "scorable_max": scorable,
+            "grade": "B+",
+            "verdict": verdict,
+            "components": {"management": {"label": "Management", "normalized": 15.0}},
+            "red_flags": {"triggered": []},
+        }
+
+    def _diff(self, before: dict, after: dict):
+        from buffett00929.snapshots import Snapshot, diff_snapshots
+
+        previous = Snapshot(run_date=date(2026, 8, 17), constituents={}, companies=[before])
+        current = Snapshot(run_date=date(2026, 8, 18), constituents={}, companies=[after])
+        return diff_snapshots(current, previous)[0]
+
+    def test_a_verdict_change_is_explained(self):
+        change = self._diff(
+            self._entry(verdict="🟠 REDUCE / 降低曝險"),
+            self._entry(verdict="🟡 HOLD / 持續觀察"),
+        )
+        assert "REDUCE" in change.explanation and "HOLD" in change.explanation
+
+    def test_a_verdict_change_survives_a_basis_shift(self):
+        """分母同時動了也一樣要報——這正是判斷會翻動的場合。"""
+        change = self._diff(
+            self._entry(verdict="🟠 REDUCE / 降低曝險", scorable=100.0),
+            self._entry(verdict="🟡 HOLD / 持續觀察", scorable=90.0),
+        )
+        assert change.basis_changed
+        assert change.is_significant
+        assert "REDUCE" in change.explanation and "HOLD" in change.explanation
+
+    def test_an_unchanged_verdict_is_not_mentioned(self):
+        change = self._diff(
+            self._entry(verdict="🟠 REDUCE / 降低曝險"),
+            self._entry(verdict="🟠 REDUCE / 降低曝險"),
+        )
+        assert "判斷" not in change.explanation
