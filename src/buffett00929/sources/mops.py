@@ -139,6 +139,9 @@ SHARE_CAPITAL = ("股本",)
 SHARE_COUNT_TOLERANCE = 0.05
 """兩路股數估計的容許差距。超過就代表面額假設不成立。"""
 
+MIN_EPS_FOR_SHARE_COUNT = 0.5
+"""低於此值的 EPS 不用來推股數：兩位小數的四捨五入誤差會超過容忍值。"""
+
 PER_SHARE_FIELDS = frozenset({"book_value_per_share"})
 """每股數值不換算仟元——與 income 的 eps 同一個規則。"""
 
@@ -448,6 +451,56 @@ class MopsClient:
     # 批次回補
     # ------------------------------------------------------------------
 
+    def reconcile_share_counts(self, history: "MopsHistory") -> None:
+        """用三條互相獨立的路徑決定股數，取彼此印證的那一組。
+
+        股本 ÷ 面額 一度是唯一的來源，但它疊了兩個假設：面額是 10 元，
+        而且股本裡只有普通股。兩個假設任一不成立就會算出偏大的股數，
+        而偏大的股數會讓 DCF 的每股價值等比例偏小、每股淨值等比例失真——
+        都不會報錯。
+
+        實測（2026-08-18，全市場約 2,250 家）：以母公司權益驗算通過 1,931 家、
+        以權益總計通過 22 家、兩者皆不符 298 家。其中 1103 嘉泥的三個數字是
+        股本 832,874,600、母公司權益 701,385,039、權益總計 704,559,430——
+        兩條權益路徑只差 0.45%，落單的是股本那一條。
+
+        所以不再預設「股本說了算」：三條路徑中只要有兩條互相印證就採用它們，
+        落單的那條被否決。全部互不相符時才回缺料。
+        """
+        for stock_id, by_period in history.balances.items():
+            incomes = history.incomes.get(stock_id) or {}
+            for period, sheet in by_period.items():
+                income = incomes.get(period)
+                if income is None:
+                    continue
+                by_earnings = _shares_from_earnings(income)
+                if by_earnings is None or by_earnings.value is None:
+                    continue
+
+                current = sheet.shares_outstanding
+                if current.is_available and current.value:
+                    agree = abs(current.value - by_earnings.value) / by_earnings.value
+                    if agree <= SHARE_COUNT_TOLERANCE:
+                        continue  # 兩條路徑一致，維持原值。
+
+                # 股本路徑落單。改由帳面路徑與盈餘路徑互相印證。
+                bvps = sheet.book_value_per_share
+                by_book = None
+                if (
+                    sheet.total_equity.is_available
+                    and sheet.total_equity.value is not None
+                    and bvps.is_available
+                    and bvps.value not in (None, 0)
+                ):
+                    by_book = sheet.total_equity.value / bvps.value  # type: ignore[operator]
+
+                if by_book and abs(by_book - by_earnings.value) / by_earnings.value <= (
+                    SHARE_COUNT_TOLERANCE
+                ):
+                    sheet.shares_outstanding = by_earnings
+                    self.share_count_bases[stock_id] = "淨利÷EPS＝權益÷每股淨值"
+                    self.share_count_rejections.pop(stock_id, None)
+
     def backfill(self, today: date | None = None) -> "MopsHistory":
         """把 N 年份的三張表抓齊，建成 {股號: {期別: 報表}} 索引。"""
         if not self.is_available:
@@ -480,6 +533,8 @@ class MopsClient:
                         )
                     history.add(kind, parsed)
 
+        self.reconcile_share_counts(history)
+
         if self.share_count_bases:
             tally: dict[str, int] = {}
             for basis in self.share_count_bases.values():
@@ -496,6 +551,25 @@ class MopsClient:
                 f"而該路徑無驗算，每股估值須留意。範例（{codes[0]}）：{sample}"
             )
         return history
+
+
+
+def _shares_from_earnings(income: IncomeStatement) -> DataPoint | None:
+    """淨利 ÷ EPS。第三條與面額無關的股數路徑，而且是市場實際用的基準。
+
+    EPS 只有兩位小數，所以絕對值太小的期別精度不夠——每股 0.10 元的
+    四捨五入就是 ±5%，比容忍值還大。這種期別寧可不表態。
+    """
+    if not income.net_income.is_available or income.net_income.value is None:
+        return None
+    if not income.eps.is_available or income.eps.value in (None, 0):
+        return None
+    if abs(income.eps.value) < MIN_EPS_FOR_SHARE_COUNT:  # type: ignore[arg-type]
+        return None
+    shares = income.net_income.value / income.eps.value  # type: ignore[operator]
+    if shares <= 0:
+        return None
+    return DataPoint.derived(shares, inputs=[income.net_income, income.eps])
 
 
 @dataclass

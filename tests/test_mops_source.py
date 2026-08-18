@@ -370,6 +370,31 @@ BALANCE_WITH_CAPITAL = """
     <td>10,000</td><td>500,000</td>
     <td>1,684,000</td><td>2,000,000</td><td>2000.00</td>
   </tr>
+  <tr>
+    <td>1104</td><td>股本落單</td><td>30,000,000</td><td>10,000,000</td>
+    <td>8,328,746</td><td>3,000,000</td>
+    <td>7,715,235</td><td>7,750,000</td><td>11.00</td>
+  </tr>
+</table></td></tr></table>
+"""
+
+# 對應 BALANCE_WITH_CAPITAL 的損益表：淨利 ÷ EPS 是第三條獨立的股數推算路徑，
+# 而且用的正是市場計算每股數字時的股數基準。
+INCOME_FOR_SHARE_COUNT = """
+<table><tr><td><table>
+  <tr>
+    <td>公司代號</td><td>公司名稱</td><td>營業收入</td>
+    <td>淨利（淨損）歸屬於母公司業主</td><td>基本每股盈餘（元）</td>
+  </tr>
+  <tr>
+    <td>2330</td><td>台積電</td><td>5,000,000</td><td>2,000</td><td>2.00</td>
+  </tr>
+  <tr>
+    <td>1103</td><td>非控制權益</td><td>5,000,000</td><td>2,000</td><td>2.00</td>
+  </tr>
+  <tr>
+    <td>1104</td><td>股本落單</td><td>30,000,000</td><td>1,402,770</td><td>2.00</td>
+  </tr>
 </table></td></tr></table>
 """
 
@@ -434,6 +459,38 @@ class TestShareCount:
         assert not shares.is_available
         reason = shares.unavailable_reason or ""
         assert "母公司權益" in reason and "權益總計" in reason
+
+    def test_earnings_break_the_tie_against_the_par_value_path(self, client):
+        """淨利 ÷ EPS 是第三條獨立路徑，而且是市場實際用的股數基準。
+
+        1103 嘉泥的實測數字否定了非控制權益的說法：母公司權益推得
+        701,385,039 股、權益總計推得 704,559,430 股——兩者只差 0.45%，
+        這家公司幾乎沒有少數股東。真正的落差是股本推得的 832,874,600 股，
+        比另外兩條路徑高 19%，也就是「股本 ÷ 10」這個假設本身不成立
+        （特別股、庫藏股，或面額不是 10 元）。
+
+        兩條路徑互相印證時就該採用它們，而不是採用落單的那一條。
+        """
+        history = MopsHistory()
+        history.add("balance", client.parse_balance(BALANCE_WITH_CAPITAL, Q1, TODAY))
+        history.add("income", client.parse_income(INCOME_FOR_SHARE_COUNT, Q1, TODAY))
+        client.reconcile_share_counts(history)
+
+        shares = history.balances["1104"][Q1].shares_outstanding
+        assert shares.is_available
+        # 母公司權益 77.15 億 ÷ 每股淨值 11.00 元 = 701,385,000 股
+        # 淨利 14.03 億 ÷ EPS 2.00 元          = 701,385,000 股   兩條印證
+        # 股本 83.29 億 ÷ 面額 10 元           = 832,874,600 股   落單，不採用
+        assert shares.value == pytest.approx(701_385_000, rel=0.01)
+        assert client.share_count_bases["1104"] == "淨利÷EPS＝權益÷每股淨值"
+
+    def test_all_three_agreeing_is_left_alone(self, client):
+        parsed_b = client.parse_balance(BALANCE_WITH_CAPITAL, Q1, TODAY)
+        history = MopsHistory()
+        history.add("balance", parsed_b)
+        history.add("income", client.parse_income(INCOME_FOR_SHARE_COUNT, Q1, TODAY))
+        client.reconcile_share_counts(history)
+        assert history.balances["2330"][Q1].shares_outstanding.value == pytest.approx(1_000_000)
 
     def test_a_rejected_share_count_is_recorded_not_silently_dropped(self, client):
         """退件是對的，但退完會沉默地回退到 FinMind 的股本——那條路徑沒有驗算。
