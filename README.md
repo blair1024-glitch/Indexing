@@ -8,25 +8,18 @@
 
 ---
 
-## ⚠️ 先讀這一段：本 repo 目前沒有真實數據
+## 本 repo 有真實分析結果
 
-系統已完成且通過測試，但**建置環境的網路政策封鎖了所有台股資料來源**，
-實測結果如下（curl 與 WebFetch 皆然）：
+`reports/` 與 `docs/index.html` 是**每日排程實際跑出來的**，不是範例。
+最近一次執行涵蓋 50 檔成分股、全部可排名，資料來自公開資訊觀測站彙總報表
+與證交所／櫃買中心 OpenAPI，皆為官方來源。
 
-| 來源 | 狀態 |
-|---|---|
-| `openapi.twse.com.tw`（證交所 OpenAPI） | 🔴 403 |
-| `www.twse.com.tw`、`mops.twse.com.tw` | 🔴 403 |
-| `www.fhtrust.com.tw`（復華投信官網） | 🔴 403 |
-| `api.finmindtrade.com` | 🔴 403 |
-| `etfinfo.tw`、`wantgoo.com`、`data.gov.tw` | 🔴 403 |
+> **開發環境的限制**：本專案的建置環境封鎖了所有台股來源
+> （`openapi.twse.com.tw`、`mopsov.twse.com.tw`、`www.fhtrust.com.tw`、
+> `api.finmindtrade.com` 一律 403），因此所有真實資料都是透過
+> GitHub Actions 取得的。在你自己的機器上執行不會有這層限制。
 
-因此本 repo 交付的是**可執行的系統**，不是預先算好的分析數字。
-在沒有官方資料的情況下填入任何評分，都會違反本系統最核心的原則
-（見下方「絕不編造數字」）。
-
-**在你自己的機器或 GitHub Actions 上執行 `make update` 即可產生真實分析**——
-那些環境沒有這層限制。想先看版面與計算邏輯，執行 `make demo`（不需網路）。
+想先看版面與計算邏輯而不連網，執行 `make demo`（合成資料，報表會顯著標示）。
 
 ---
 
@@ -35,7 +28,7 @@
 ```bash
 make install          # 安裝相依套件
 make check            # 驗證設定檔與指標實作一致
-make test             # 執行 205 項測試（不需網路）
+make test             # 執行測試（不需網路）
 make demo             # 用合成資料產生 Dashboard，確認版面與計算
 
 export FINMIND_TOKEN=你的token   # 選用，見下方「資料來源」
@@ -117,6 +110,71 @@ make update           # 抓取真實資料，產生 Dashboard 與報表
 
 > 00929 追蹤的是「特選臺灣**上市上櫃**科技優息指數」，成分股含上櫃公司，
 > 所以同時接了櫃買中心的端點。
+
+---
+
+## 設定 FINMIND_TOKEN（SOP）
+
+沒有 token 系統照常執行，只是 **FCF、盈再率、殖利率、歷史本益比分位、產業別**
+會標示「資料不足」，而且**安全邊際整項算不出來**——估值需要至少 2 種方法交叉驗證，
+沒有 token 時只有 PEG 可用，所以「最便宜 Top 10」是空的、不會有任何 BUY 判斷。
+
+設好之後可評分分母會從 **85 分回到 100 分**。
+
+### 一、取得 token
+
+1. 到 <https://finmindtrade.com> 註冊免費帳號
+2. 登入後於帳戶頁面複製 API token
+
+### 二、設定到 GitHub（每日排程用）
+
+1. 進入 repo 的 **Settings → Secrets and variables → Actions**
+2. 按 **New repository secret**
+3. Name 填 `FINMIND_TOKEN`（**大小寫必須完全一致**，拼錯不會報錯，只會靜默地繼續當作沒設定）
+4. Secret 貼上 token → **Add secret**
+
+工作流程已經有 `FINMIND_TOKEN: ${{ secrets.FINMIND_TOKEN }}`，設好即生效，不必改任何檔案。
+
+### 三、本機執行（選用）
+
+```bash
+export FINMIND_TOKEN=你的token
+make update
+```
+
+**不要**把 token 寫進 `config/sources.yaml` 或任何會進版控的檔案——
+程式只從環境變數讀（`sources.yaml` 裡的 `token_env` 只是變數**名稱**）。
+
+### 四、確認真的生效
+
+手動觸發一次 `daily-update` 後，檢查 `reports/README.md`：
+
+| 檢查點 | 沒生效 | 生效 |
+| --- | --- | --- |
+| 「資料來源」段落 | 沒有 FinMind | 出現 `FinMind:...` 條目 |
+| 「資料缺口」段落 | 每檔都寫「未設定 FINMIND_TOKEN 環境變數」 | 該則訊息消失 |
+| 逐檔報表的可評分 | `/ 85 可評分` | `/ 100 可評分` |
+| 最便宜 Top 10 | 空的 | 有內容 |
+
+「資料來源」那份清單是**由實際命中的 provenance 反推**的，
+所以 FinMind 出現在上面就是它真的被用到的證據，不是設定檔的宣告。
+
+### 五、失敗時怎麼看
+
+執行**不會**因為 token 有問題而失敗，這是刻意的——但也代表要主動檢查：
+
+- **名稱拼錯**：報表仍寫「未設定 FINMIND_TOKEN 環境變數」
+- **token 無效或過期**：報表的資料缺口會出現 FinMind 回傳的錯誤訊息
+- **超出速率限制**：免費方案有每小時請求上限。一次冷啟動約 300 次請求
+  （50 檔 × 6 個資料集 + 1），已設 0.6 秒間隔，約 3 分鐘跑完；
+  同一小時內重複執行才有機會撞到上限。HTTP 快取為 12 小時，
+  當天再跑多半直接命中快取，不會重打。
+
+### 六、token 不會改變來源優先序
+
+FinMind 只**補官方沒有的欄位**，不覆蓋 MOPS 或證交所的數字（規格第十九節）。
+設了 token 之後，營收、淨利、資產、權益這些仍然來自官方彙總報表——
+可以在逐檔報表的「資料來源」欄逐項核對。
 
 ---
 
@@ -211,7 +269,8 @@ ROE 60% 在任何門檻帶裡都會拿滿分，即使它完全來自 4 倍槓桿
 驗證設定 → 跑測試 → 更新分析 → 把 `data/snapshots`、`docs`、`reports` commit 回 repo。
 當日的評分變化與紅旗會寫進 commit 訊息，所以 `git log` 本身就是變化歷史。
 
-需在 repo 設定 `FINMIND_TOKEN` secret（未設定仍會執行，但長期指標標示資料不足）。
+需在 repo 設定 `FINMIND_TOKEN` secret，步驟見上方「設定 FINMIND_TOKEN（SOP）」
+（未設定仍會執行，但相關指標標示資料不足）。
 
 ---
 
