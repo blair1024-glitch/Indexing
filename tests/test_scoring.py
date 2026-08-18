@@ -267,3 +267,81 @@ class TestPerShareValuesUseAShareCount:
         result = share_count(company)
         assert not result.is_available
         assert "股數" in (result.unavailable_reason or "")
+
+
+class TestNormalizationGuard:
+    """正常化假設均值回歸。結構性衰退不是循環，平均值代表的是
+    公司**已經失去**的獲利能力——用它估值會得出拿不回來的「便宜」。
+
+    實例：可寧衛（8422）EPS 五年 CAGR −41%、目前每股盈餘約 1.3 元，
+    但 5 年平均 8.81 元把它估到 133 元，+81% 安全邊際、「最便宜」榜首。
+    """
+
+    def _company(self, eps_by_year: list[float], dividends: list[float] | None = None):
+        from buffett00929.models import (
+            BalanceSheet, Company, DataPoint, DividendRecord, FiscalPeriod, IncomeStatement,
+        )
+
+        company = Company(stock_id="8422", name="可寧衛股")
+        start = 2026 - len(eps_by_year)
+        company.income_statements = [
+            IncomeStatement(
+                period=FiscalPeriod(start + i, 0),
+                revenue=DataPoint.of(1e9, "MOPS"),
+                net_income=DataPoint.of(eps * 1e8, "MOPS"),
+                eps=DataPoint.of(eps, "MOPS"),
+            )
+            for i, eps in enumerate(eps_by_year)
+        ]
+        company.balance_sheets = [
+            BalanceSheet(
+                period=FiscalPeriod(start + i, 0),
+                total_assets=DataPoint.of(1e10, "MOPS"),
+                total_equity=DataPoint.of(8e9, "MOPS"),
+                shares_outstanding=DataPoint.of(1e8, "MOPS"),
+            )
+            for i in range(len(eps_by_year))
+        ]
+        # 合理本益比取自歷史 PE 分位，沒有它 normalized_pe 會在守門之前就退出
+        company.market_data.pe_history = [15.0] * 8
+        for i, d in enumerate(dividends or []):
+            company.dividends.append(
+                DividendRecord(year=start + i, cash_dividend=DataPoint.of(d, "FinMind"))
+            )
+        return company
+
+    def _config(self):
+        from buffett00929.config import Config
+
+        return (Config.load().scoring.get("valuation") or {})
+
+    def test_collapsed_earnings_disable_the_normalised_pe(self):
+        from buffett00929.scoring.valuation import _method_normalized_pe
+
+        company = self._company([9.0, 9.0, 8.0, 7.0, 1.3])
+        method = _method_normalized_pe(company, self._config())
+        assert not method.value_per_share.is_available
+        assert "正常化前提不成立" in (method.value_per_share.unavailable_reason or "")
+
+    def test_a_steady_earner_is_untouched(self):
+        """守門不能把正常運作的公司也一起關掉。"""
+        from buffett00929.scoring.valuation import _method_normalized_pe
+
+        company = self._company([9.0, 9.5, 10.0, 10.2, 10.5])
+        method = _method_normalized_pe(company, self._config())
+        assert method.value_per_share.is_available
+
+    def test_a_collapsed_dividend_disables_the_yield_method(self):
+        from buffett00929.scoring.valuation import _method_dividend_yield
+
+        company = self._company([9.0] * 5, dividends=[10.0, 10.0, 1.2])
+        method = _method_dividend_yield(company, self._config())
+        assert not method.value_per_share.is_available
+        assert "正常化前提不成立" in (method.value_per_share.unavailable_reason or "")
+
+    def test_a_steady_dividend_is_untouched(self):
+        from buffett00929.scoring.valuation import _method_dividend_yield
+
+        company = self._company([9.0] * 5, dividends=[7.0, 7.2, 7.5])
+        method = _method_dividend_yield(company, self._config())
+        assert method.value_per_share.is_available

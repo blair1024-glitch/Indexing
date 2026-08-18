@@ -157,6 +157,38 @@ def justified_pe(company: Company, config: dict) -> DataPoint:
 # --------------------------------------------------------------------------
 
 
+
+def _normalization_is_contradicted(
+    latest: float | None, average: float, config: dict, *, eps_cagr: DataPoint | None = None
+) -> str | None:
+    """正常化的前提被趨勢否定時，回傳原因；否則回傳 None。
+
+    取平均是為了抹平景氣循環——前提是會回到平均。結構性衰退不是循環，
+    平均值代表的是公司**已經失去**的獲利能力，用它估值會得出「非常便宜」，
+    而那個便宜是拿不回來的東西換算出來的。
+
+    寧可標示不可靠，也不要給一個看起來很有信心的內在價值：
+    規格第二節要的是「資料不足就說資料不足」，不是硬算一個數字。
+    """
+    guard = config.get("normalization_guard") or {}
+    min_ratio = float(guard.get("min_latest_to_average", 0.5))
+    min_cagr = float(guard.get("min_eps_cagr", -0.15))
+
+    if latest is not None and average > 0 and latest / average < min_ratio:
+        return (
+            f"最新一年僅為所用平均的 {latest / average:.0%}"
+            f"（低於 {min_ratio:.0%} 門檻），平均值已不代表當前獲利能力"
+        )
+
+    if eps_cagr is not None and eps_cagr.is_available and eps_cagr.value is not None:
+        if eps_cagr.value < min_cagr:
+            return (
+                f"EPS 年複合成長率 {eps_cagr.value:.1%}"
+                f"（低於 {min_cagr:.0%} 門檻），屬結構性衰退而非景氣循環"
+            )
+    return None
+
+
 def _method_normalized_pe(company: Company, config: dict) -> ValuationMethod:
     years = int(config.get("normalized_eps_years", 5))
     eps = normalized_eps(company, years)
@@ -168,6 +200,21 @@ def _method_normalized_pe(company: Company, config: dict) -> ValuationMethod:
             key="normalized_pe",
             label="正常化 EPS × 合理本益比",
             value_per_share=DataPoint.missing(reason or "資料不足"),
+        )
+
+    incomes = company.trailing_annual_incomes(years)
+    latest_eps = incomes[-1].eps.value if incomes and incomes[-1].eps.is_available else None
+    contradiction = _normalization_is_contradicted(
+        latest_eps,
+        eps.value,  # type: ignore[arg-type]
+        config,
+        eps_cagr=stability.eps_cagr(company, years),
+    )
+    if contradiction:
+        return ValuationMethod(
+            key="normalized_pe",
+            label="正常化 EPS × 合理本益比",
+            value_per_share=DataPoint.missing(f"正常化前提不成立：{contradiction}"),
         )
 
     value = eps.value * pe.value  # type: ignore[operator]
@@ -209,6 +256,15 @@ def _method_dividend_yield(company: Company, config: dict) -> ValuationMethod:
             key="dividend_yield",
             label="殖利率法",
             value_per_share=DataPoint.missing("平均現金股利為 0，不適用殖利率法"),
+        )
+
+    latest_dividend = values[-1]
+    contradiction = _normalization_is_contradicted(latest_dividend, avg_dividend, config)
+    if contradiction:
+        return ValuationMethod(
+            key="dividend_yield",
+            label="殖利率法",
+            value_per_share=DataPoint.missing(f"正常化前提不成立：{contradiction}"),
         )
 
     value = avg_dividend / required
