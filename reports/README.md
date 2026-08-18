@@ -391,7 +391,6 @@ _以下項目未能取得資料。系統不會以推估值填補，相關指標�
   - 資產負債表 2026Q2 已以官方數字覆蓋 5 個欄位（官方優先）
 
 **執行警告**：
-- MOPS 現金流量表 2018FY otc 未取得：https://mopsov.twse.com.tw/mops/web/ajax_t163sb20 重試 3 次後仍失敗：HTTPSConnectionPool(host='mopsov.twse.com.tw', port=443): Max retries exceeded with url: /mops/web/ajax_t163sb20 (Caused by NewConnectionError("HTTPSConnection(host='mopsov.twse.com.tw', port=443): Failed to establish a new connection: [Errno 111] Connection refused"))
 - MOPS 彙總報表有 12 個欄位在部分業別版面上對不到：找不到欄位 cash、找不到欄位 cost_of_revenue、找不到欄位 current_assets、找不到欄位 current_liabilities、找不到欄位 gross_profit、找不到欄位 non_operating_income、找不到欄位 operating_expenses、找不到欄位 operating_income、找不到欄位 revenue、找不到欄位 total_assets、找不到欄位 total_equity、找不到欄位 total_liabilities。彙總報表依業別分表，銀行業沒有營業成本、金融業不分流動與非流動，屬版面差異；是否真的影響到成分股，見下一則。
 - 全部成分股的核心欄位（營收／稅後淨利／總資產／權益）皆完整，上述欄位差異未影響本次分析
 - FinMind income_statement 有 11 個科目未對應到欄位；執行 `buffett00929 verify-sources` 可列出完整名稱
@@ -405,10 +404,10 @@ _以下項目未能取得資料。系統不會以推估值填補，相關指標�
   - FinMind:TaiwanStockMonthRevenue（6,320 個數據點）
   - MOPS 彙總報表 t163sb04（4,500 個數據點）
   - MOPS 彙總報表 t163sb05（3,965 個數據點）
-  - FinMind:TaiwanStockBalanceSheet（2,386 個數據點）
-  - MOPS 彙總報表 t163sb20（1,467 個數據點）
+  - FinMind:TaiwanStockBalanceSheet（2,375 個數據點）
+  - MOPS 彙總報表 t163sb20（1,500 個數據點）
   - FinMind:TaiwanStockDividend（1,086 個數據點）
-  - FinMind:TaiwanStockCashFlowsStatement（1,009 個數據點）
+  - FinMind:TaiwanStockCashFlowsStatement（998 個數據點）
   - TWSE:BWIBBU_ALL（117 個數據點）
   - TWSE:t187ap05_L（78 個數據點）
   - 復華投信官方持股 API（fundID=ETF21）（50 個數據點）
