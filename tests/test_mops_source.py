@@ -98,6 +98,7 @@ CASHFLOW_HTML = """
 """
 
 Q1 = FiscalPeriod(2025, 1)
+Q3 = FiscalPeriod(2025, 3)
 TODAY = date(2026, 8, 17)
 
 
@@ -398,6 +399,20 @@ INCOME_FOR_SHARE_COUNT = """
 </table></td></tr></table>
 """
 
+# 同一家公司、另一期，但**沒有**「淨利歸屬於母公司業主」欄。
+# 本期淨利含非控制權益，EPS 只算母公司——相除會高估股數。
+INCOME_WITHOUT_PARENT_COLUMN = """
+<table><tr><td><table>
+  <tr>
+    <td>公司代號</td><td>公司名稱</td><td>營業收入</td>
+    <td>本期淨利（淨損）</td><td>基本每股盈餘（元）</td>
+  </tr>
+  <tr>
+    <td>1104</td><td>股本落單</td><td>30,000,000</td><td>1,700,000</td><td>2.00</td>
+  </tr>
+</table></td></tr></table>
+"""
+
 CASHFLOW_WITH_ENDING = """
 <table><tr><td><table>
   <tr>
@@ -491,6 +506,43 @@ class TestShareCount:
         history.add("income", client.parse_income(INCOME_FOR_SHARE_COUNT, Q1, TODAY))
         client.reconcile_share_counts(history)
         assert history.balances["2330"][Q1].shares_outstanding.value == pytest.approx(1_000_000)
+
+    def test_a_company_needing_correction_gets_it_in_every_period(self, client):
+        """基準必須整條序列一致，不能逐期各自挑一個。
+
+        修正只在「股本路徑與盈餘路徑不合」時觸發，於是盈餘路徑不可用的期別
+        （EPS 太小、或缺損益表）就留著未修正的股本值，同一條序列裡兩種基準
+        交錯。實測結果：8422 的股本年化成長率變成 +79.5%、5536 +21.4%，
+        來源標示同時出現 t163sb04 與 t163sb05——公司什麼都沒做，
+        只是我們在中途換了尺。
+
+        需要修正的公司，其股本基準是結構性錯誤（特別股、庫藏股、面額非 10 元），
+        不會只錯一期。驗不到的期別要標資料不足，不能沿用已知錯誤的那把尺。
+        """
+        history = MopsHistory()
+        history.add("balance", client.parse_balance(BALANCE_WITH_CAPITAL, Q1, TODAY))
+        history.add("income", client.parse_income(INCOME_FOR_SHARE_COUNT, Q1, TODAY))
+        # 第二期的損益表沒有母公司欄，盈餘路徑不可信——不得沿用股本值。
+        history.add("balance", client.parse_balance(BALANCE_WITH_CAPITAL, Q3, TODAY))
+        history.add("income", client.parse_income(INCOME_WITHOUT_PARENT_COLUMN, Q3, TODAY))
+        client.reconcile_share_counts(history)
+
+        corrected = history.balances["1104"][Q1].shares_outstanding
+        unverifiable = history.balances["1104"][Q3].shares_outstanding
+        assert corrected.is_available
+        assert not unverifiable.is_available, "驗不到的期別不得沿用股本推估值"
+        assert "基準" in (unverifiable.unavailable_reason or "")
+
+    def test_a_company_that_never_needed_correction_keeps_every_period(self, client):
+        """沒問題的公司不受影響——這道規則不能把正常序列打出洞來。"""
+        history = MopsHistory()
+        history.add("balance", client.parse_balance(BALANCE_WITH_CAPITAL, Q1, TODAY))
+        history.add("income", client.parse_income(INCOME_FOR_SHARE_COUNT, Q1, TODAY))
+        history.add("balance", client.parse_balance(BALANCE_WITH_CAPITAL, Q3, TODAY))
+        client.reconcile_share_counts(history)
+
+        for period in (Q1, Q3):
+            assert history.balances["2330"][period].shares_outstanding.is_available
 
     def test_a_rejected_share_count_is_recorded_not_silently_dropped(self, client):
         """退件是對的，但退完會沉默地回退到 FinMind 的股本——那條路徑沒有驗算。

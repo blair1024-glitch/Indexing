@@ -270,3 +270,64 @@ class TestDuPontAgreesWithTheReportedRoe:
         decomposition = roe_metrics.dupont(company)
         assert not decomposition.roe.is_available
         assert "2025" in (decomposition.roe.unavailable_reason or "")
+
+
+class TestShareCountGrowthNeedsOneRuler:
+    """跨基準的成長率不是成長率，是換尺的幅度。
+
+    股數有四條推算路徑（股本÷面額、權益÷每股淨值、淨利÷EPS、FinMind 股本），
+    彼此對同一家公司可能給出差 20% 的數字。逐期各自挑一條，序列就會在中途換尺，
+    而年化成長率會忠實地把換尺算成稀釋：實測 8422 +79.5%、6548 −55.1%、
+    8070 −42.9%，全都足以觸發「股本快速膨脹」重大紅旗。公司什麼都沒做。
+
+    這與 snapshots.py 對總分的處理是同一條原則：分母變了就不能直接相比。
+    """
+
+    def _company(self, series: list[tuple[int, float, str]]):
+        from buffett00929.models import BalanceSheet, Company, DataPoint, FiscalPeriod
+
+        company = Company(stock_id="8422", name="可寧衛股")
+        company.balance_sheets = [
+            BalanceSheet(
+                period=FiscalPeriod(year, 0),
+                shares_outstanding=DataPoint.of(shares, source),
+            )
+            for year, shares, source in series
+        ]
+        return company
+
+    def test_a_basis_switch_is_not_reported_as_dilution(self):
+        from buffett00929.metrics import balance
+
+        company = self._company([
+            (2021, 1.0e8, "MOPS 彙總報表 t163sb05"),
+            (2025, 1.8e8, "MOPS 彙總報表 t163sb04"),
+        ])
+        result = balance.share_count_growth(company)
+        assert not result.is_available
+        assert "基準" in (result.unavailable_reason or "")
+
+    def test_one_ruler_still_measures_real_dilution(self):
+        from buffett00929.metrics import balance
+
+        company = self._company([
+            (2021, 1.0e8, "MOPS 彙總報表 t163sb05"),
+            (2025, 1.8e8, "MOPS 彙總報表 t163sb05"),
+        ])
+        result = balance.share_count_growth(company)
+        assert result.is_available
+        assert result.value == pytest.approx(0.158, abs=0.005)
+
+    def test_the_longest_single_basis_run_is_used(self):
+        """換尺不該讓整項變成資料不足——同基準的區段還能用就用。"""
+        from buffett00929.metrics import balance
+
+        company = self._company([
+            (2020, 5.0e8, "FinMind:TaiwanStockBalanceSheet"),
+            (2022, 1.0e8, "MOPS 彙總報表 t163sb05"),
+            (2023, 1.05e8, "MOPS 彙總報表 t163sb05"),
+            (2025, 1.10e8, "MOPS 彙總報表 t163sb05"),
+        ])
+        result = balance.share_count_growth(company)
+        assert result.is_available
+        assert result.value == pytest.approx(0.0323, abs=0.005)
