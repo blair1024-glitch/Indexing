@@ -77,11 +77,48 @@ def debt_growth(company: Company) -> DataPoint:
     return DataPoint.derived(curr.value / prev.value - 1, inputs=[prev, curr])  # type: ignore[operator]
 
 
+def _share_count_basis(point: DataPoint) -> str:
+    """股數是用哪一條路徑算出來的。跨路徑的兩個數字不能相除。"""
+    if point.provenance is None:
+        return "?"
+    return point.provenance.source
+
+
+def _longest_single_basis_run(balances: list) -> list:
+    """取序列中最長的同基準連續區段。
+
+    股數有四條推算路徑（股本÷面額、權益÷每股淨值、淨利÷EPS、FinMind 股本），
+    對同一家公司可能差 20% 以上。序列中途換路徑，年化成長率就會把換尺
+    算成稀釋——實測 8422 +79.5%、6548 −55.1%、8070 −42.9%，
+    每一個都足以觸發「股本快速膨脹」重大紅旗，而公司什麼都沒做。
+
+    與 ``snapshots.py`` 對總分的處理同一條原則：衡量基準變了就不能直接比。
+    但也不必整項放棄——同基準的區段仍然是可信的，取最長的那一段。
+    """
+    best: list = []
+    current: list = []
+    for sheet in balances:
+        basis = _share_count_basis(sheet.shares_outstanding)
+        if current and _share_count_basis(current[-1].shares_outstanding) != basis:
+            current = []
+        current.append(sheet)
+        if len(current) > len(best):
+            best = list(current)
+    return best
+
+
 def share_count_growth(company: Company, years: int = 5) -> DataPoint:
     """在外流通股數年化成長率——衡量股本稀釋（規格第八節、第十六節）。"""
-    balances = [b for b in company.annual_balances() if b.shares_outstanding.is_available]
-    if len(balances) < 2:
+    available = [b for b in company.annual_balances() if b.shares_outstanding.is_available]
+    if len(available) < 2:
         return DataPoint.missing("股數資料不足 2 年，無法計算股本稀釋率")
+
+    balances = _longest_single_basis_run(available)
+    if len(balances) < 2:
+        return DataPoint.missing(
+            "股數序列每一期的推算基準都不同（股本÷面額、權益÷每股淨值、淨利÷EPS "
+            "各有不同結果），跨基準相除只會量到換尺的幅度，不計股本稀釋率"
+        )
 
     window = balances[-years:] if len(balances) >= years else balances
     first, last = window[0].shares_outstanding, window[-1].shares_outstanding

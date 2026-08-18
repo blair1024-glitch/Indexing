@@ -18,7 +18,7 @@ from datetime import date
 from pathlib import Path
 
 from .config import Config
-from .models import Company, MarketData
+from .models import Company, DataPoint, MarketData
 from .normalize import (
     CumulativeDetection,
     detect_cumulative,
@@ -228,6 +228,8 @@ class DataLoader:
                 continue
 
             existing = getattr(company, attribute)
+            if attribute == "balance_sheets":
+                drop_conflicting_share_counts(existing, list(fetched))
             for statement in list(fetched) + _annualise(attribute, fetched):
                 _merge_statement(existing, statement, company, label, overwrite=False)
 
@@ -474,6 +476,34 @@ def _annualise(attribute: str, statements: list) -> list:
     if attribute == "cash_flows":
         return to_annual_cash_flows(statements, True)
     return []
+
+
+def drop_conflicting_share_counts(official: list, incoming: list) -> None:
+    """MOPS 已驗證過股數的公司，不讓 FinMind 的股數進同一條序列。
+
+    成長率序列混來源就會憑空長出紅旗。MOPS 現在用「淨利 ÷ EPS」修正
+    股本路徑算錯的股數，FinMind 那邊仍然是股本 ÷ 10——同一家公司、
+    兩把不同的尺。接在一起之後長華電材（8070）的股本年化成長率變成
+    −42.9%、長華科技（6548）−55.1%，然後觸發「股本快速膨脹」這類重大紅旗。
+    公司什麼都沒做。
+
+    序列有缺口，好過序列被兩種基準汙染：缺口會誠實地標成資料不足，
+    混來源則會產出一個看起來很具體、而且錯得很有說服力的成長率。
+    """
+    verified = any(
+        sheet.shares_outstanding.is_available
+        and sheet.shares_outstanding.provenance is not None
+        and "MOPS" in sheet.shares_outstanding.provenance.source
+        for sheet in official
+    )
+    if not verified:
+        return
+    for sheet in incoming:
+        if sheet.shares_outstanding.is_available:
+            sheet.shares_outstanding = DataPoint.missing(
+                "MOPS 已提供經交叉驗證的股數，不採用 FinMind 的股本推估值"
+                "（兩者基準不同，混入同一序列會讓成長率失真）"
+            )
 
 
 def _merge_statement(

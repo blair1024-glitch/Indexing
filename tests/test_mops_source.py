@@ -98,6 +98,7 @@ CASHFLOW_HTML = """
 """
 
 Q1 = FiscalPeriod(2025, 1)
+Q3 = FiscalPeriod(2025, 3)
 TODAY = date(2026, 8, 17)
 
 
@@ -365,6 +366,50 @@ BALANCE_WITH_CAPITAL = """
     <td>10,000</td><td>500,000</td>
     <td>2,000,000</td><td>2,000,000</td><td>1000.00</td>
   </tr>
+  <tr>
+    <td>1103</td><td>非控制權益</td><td>3,000,000</td><td>1,000,000</td>
+    <td>10,000</td><td>500,000</td>
+    <td>1,684,000</td><td>2,000,000</td><td>2000.00</td>
+  </tr>
+  <tr>
+    <td>1104</td><td>股本落單</td><td>30,000,000</td><td>10,000,000</td>
+    <td>8,328,746</td><td>3,000,000</td>
+    <td>7,715,235</td><td>7,750,000</td><td>11.00</td>
+  </tr>
+</table></td></tr></table>
+"""
+
+# 對應 BALANCE_WITH_CAPITAL 的損益表：淨利 ÷ EPS 是第三條獨立的股數推算路徑，
+# 而且用的正是市場計算每股數字時的股數基準。
+INCOME_FOR_SHARE_COUNT = """
+<table><tr><td><table>
+  <tr>
+    <td>公司代號</td><td>公司名稱</td><td>營業收入</td>
+    <td>淨利（淨損）歸屬於母公司業主</td><td>基本每股盈餘（元）</td>
+  </tr>
+  <tr>
+    <td>2330</td><td>台積電</td><td>5,000,000</td><td>2,000</td><td>2.00</td>
+  </tr>
+  <tr>
+    <td>1103</td><td>非控制權益</td><td>5,000,000</td><td>2,000</td><td>2.00</td>
+  </tr>
+  <tr>
+    <td>1104</td><td>股本落單</td><td>30,000,000</td><td>1,402,770</td><td>2.00</td>
+  </tr>
+</table></td></tr></table>
+"""
+
+# 同一家公司、另一期，但**沒有**「淨利歸屬於母公司業主」欄。
+# 本期淨利含非控制權益，EPS 只算母公司——相除會高估股數。
+INCOME_WITHOUT_PARENT_COLUMN = """
+<table><tr><td><table>
+  <tr>
+    <td>公司代號</td><td>公司名稱</td><td>營業收入</td>
+    <td>本期淨利（淨損）</td><td>基本每股盈餘（元）</td>
+  </tr>
+  <tr>
+    <td>1104</td><td>股本落單</td><td>30,000,000</td><td>1,700,000</td><td>2.00</td>
+  </tr>
 </table></td></tr></table>
 """
 
@@ -401,6 +446,130 @@ class TestShareCount:
     def test_absent_share_capital_is_missing(self, client):
         parsed = client.parse_balance(BALANCE_HTML, Q1, TODAY)
         assert not parsed["2330"].shares_outstanding.is_available
+
+    def test_a_minority_interest_does_not_look_like_a_wrong_par_value(self, client):
+        """MOPS 的每股參考淨值是用**權益總計**算的，我們拿的是母公司權益。
+
+        兩者差的就是非控制權益，所以只要公司有子公司少數股東，驗算就過不了——
+        實測退掉了 348 檔，約佔全市場 18%，遠超過「面額不是 10 元」的合理比例。
+        範例（1103 嘉泥）：股本推得 832,874,600 股，母公司權益推得 701,385,039 股，
+        比值 0.842 正好是母公司權益佔權益總計的比重。
+        """
+        parsed = client.parse_balance(BALANCE_WITH_CAPITAL, Q1, TODAY)
+        shares = parsed["1103"].shares_outstanding
+        assert shares.is_available
+        assert shares.value == pytest.approx(1_000_000)
+        assert "1103" not in client.share_count_rejections
+
+    def test_the_basis_that_matched_is_recorded(self, client):
+        """一次執行就要能回答「是哪一種基準相符」，否則只能再猜一輪。"""
+        client.parse_balance(BALANCE_WITH_CAPITAL, Q1, TODAY)
+        assert client.share_count_bases["1103"] == "權益總計"
+        assert client.share_count_bases["2330"] == "母公司權益"
+
+    def test_neither_basis_matching_is_still_refused(self, client):
+        """兩種基準都對不上才是真的面額異常——那個退件必須保留。"""
+        parsed = client.parse_balance(BALANCE_WITH_CAPITAL, Q1, TODAY)
+        shares = parsed["9999"].shares_outstanding
+        assert not shares.is_available
+        reason = shares.unavailable_reason or ""
+        assert "母公司權益" in reason and "權益總計" in reason
+
+    def test_earnings_break_the_tie_against_the_par_value_path(self, client):
+        """淨利 ÷ EPS 是第三條獨立路徑，而且是市場實際用的股數基準。
+
+        1103 嘉泥的實測數字否定了非控制權益的說法：母公司權益推得
+        701,385,039 股、權益總計推得 704,559,430 股——兩者只差 0.45%，
+        這家公司幾乎沒有少數股東。真正的落差是股本推得的 832,874,600 股，
+        比另外兩條路徑高 19%，也就是「股本 ÷ 10」這個假設本身不成立
+        （特別股、庫藏股，或面額不是 10 元）。
+
+        兩條路徑互相印證時就該採用它們，而不是採用落單的那一條。
+        """
+        history = MopsHistory()
+        history.add("balance", client.parse_balance(BALANCE_WITH_CAPITAL, Q1, TODAY))
+        history.add("income", client.parse_income(INCOME_FOR_SHARE_COUNT, Q1, TODAY))
+        client.reconcile_share_counts(history)
+
+        shares = history.balances["1104"][Q1].shares_outstanding
+        assert shares.is_available
+        # 母公司權益 77.15 億 ÷ 每股淨值 11.00 元 = 701,385,000 股
+        # 淨利 14.03 億 ÷ EPS 2.00 元          = 701,385,000 股   兩條印證
+        # 股本 83.29 億 ÷ 面額 10 元           = 832,874,600 股   落單，不採用
+        assert shares.value == pytest.approx(701_385_000, rel=0.01)
+        assert client.share_count_bases["1104"] == "淨利÷EPS＝權益÷每股淨值"
+
+    def test_all_three_agreeing_is_left_alone(self, client):
+        parsed_b = client.parse_balance(BALANCE_WITH_CAPITAL, Q1, TODAY)
+        history = MopsHistory()
+        history.add("balance", parsed_b)
+        history.add("income", client.parse_income(INCOME_FOR_SHARE_COUNT, Q1, TODAY))
+        client.reconcile_share_counts(history)
+        assert history.balances["2330"][Q1].shares_outstanding.value == pytest.approx(1_000_000)
+
+    def test_a_company_needing_correction_gets_it_in_every_period(self, client):
+        """基準必須整條序列一致，不能逐期各自挑一個。
+
+        修正只在「股本路徑與盈餘路徑不合」時觸發，於是盈餘路徑不可用的期別
+        （EPS 太小、或缺損益表）就留著未修正的股本值，同一條序列裡兩種基準
+        交錯。實測結果：8422 的股本年化成長率變成 +79.5%、5536 +21.4%，
+        來源標示同時出現 t163sb04 與 t163sb05——公司什麼都沒做，
+        只是我們在中途換了尺。
+
+        需要修正的公司，其股本基準是結構性錯誤（特別股、庫藏股、面額非 10 元），
+        不會只錯一期。驗不到的期別要標資料不足，不能沿用已知錯誤的那把尺。
+        """
+        history = MopsHistory()
+        history.add("balance", client.parse_balance(BALANCE_WITH_CAPITAL, Q1, TODAY))
+        history.add("income", client.parse_income(INCOME_FOR_SHARE_COUNT, Q1, TODAY))
+        # 第二期的損益表沒有母公司欄，盈餘路徑不可信——不得沿用股本值。
+        history.add("balance", client.parse_balance(BALANCE_WITH_CAPITAL, Q3, TODAY))
+        history.add("income", client.parse_income(INCOME_WITHOUT_PARENT_COLUMN, Q3, TODAY))
+        client.reconcile_share_counts(history)
+
+        corrected = history.balances["1104"][Q1].shares_outstanding
+        unverifiable = history.balances["1104"][Q3].shares_outstanding
+        assert corrected.is_available
+        assert not unverifiable.is_available, "驗不到的期別不得沿用股本推估值"
+        assert "基準" in (unverifiable.unavailable_reason or "")
+
+    def test_consolidated_net_income_is_not_divided_by_a_parent_only_eps(self, client):
+        """沒有母公司欄時，本期淨利含非控制權益，EPS 只算母公司——不能相除。
+
+        1104 該期的本期淨利 17.0 億含少數股東，EPS 2.00 元只算母公司。
+        相除得 850,000,000 股，比正確的 701,385,000 股高 21%，而且**只有
+        缺母公司欄的期別會被放大**——序列就此中途換基準，年化成長率
+        再把換基準算成稀釋。這是第 2 輪修正自己種下的缺陷。
+        """
+        history = MopsHistory()
+        history.add("balance", client.parse_balance(BALANCE_WITH_CAPITAL, Q3, TODAY))
+        history.add("income", client.parse_income(INCOME_WITHOUT_PARENT_COLUMN, Q3, TODAY))
+        client.reconcile_share_counts(history)
+
+        shares = history.balances["1104"][Q3].shares_outstanding
+        assert not shares.is_available, "缺母公司欄時盈餘路徑不得表態"
+
+    def test_the_parent_column_is_what_makes_the_earnings_path_usable(self, client):
+        """有母公司欄就照常修正——這道防線不能把正常的那條路也關掉。"""
+        history = MopsHistory()
+        history.add("balance", client.parse_balance(BALANCE_WITH_CAPITAL, Q1, TODAY))
+        history.add("income", client.parse_income(INCOME_FOR_SHARE_COUNT, Q1, TODAY))
+        client.reconcile_share_counts(history)
+
+        shares = history.balances["1104"][Q1].shares_outstanding
+        assert shares.is_available
+        assert shares.value == pytest.approx(701_385_000, rel=0.01)
+
+    def test_a_company_that_never_needed_correction_keeps_every_period(self, client):
+        """沒問題的公司不受影響——這道規則不能把正常序列打出洞來。"""
+        history = MopsHistory()
+        history.add("balance", client.parse_balance(BALANCE_WITH_CAPITAL, Q1, TODAY))
+        history.add("income", client.parse_income(INCOME_FOR_SHARE_COUNT, Q1, TODAY))
+        history.add("balance", client.parse_balance(BALANCE_WITH_CAPITAL, Q3, TODAY))
+        client.reconcile_share_counts(history)
+
+        for period in (Q1, Q3):
+            assert history.balances["2330"][period].shares_outstanding.is_available
 
     def test_a_rejected_share_count_is_recorded_not_silently_dropped(self, client):
         """退件是對的，但退完會沉默地回退到 FinMind 的股本——那條路徑沒有驗算。

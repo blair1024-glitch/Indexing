@@ -139,6 +139,9 @@ SHARE_CAPITAL = ("股本",)
 SHARE_COUNT_TOLERANCE = 0.05
 """兩路股數估計的容許差距。超過就代表面額假設不成立。"""
 
+MIN_EPS_FOR_SHARE_COUNT = 0.5
+"""低於此值的 EPS 不用來推股數：兩位小數的四捨五入誤差會超過容忍值。"""
+
 PER_SHARE_FIELDS = frozenset({"book_value_per_share"})
 """每股數值不換算仟元——與 income 的 eps 同一個規則。"""
 
@@ -198,37 +201,62 @@ def _column_index(header: list[str], candidates: Iterable[str]) -> int | None:
 
 
 def _share_count(
-    share_capital: DataPoint, equity: DataPoint, book_value_per_share: DataPoint
-) -> DataPoint:
-    """由股本推算在外流通股數，並以每股淨值交叉驗算。
+    share_capital: DataPoint,
+    parent_equity: DataPoint,
+    total_equity: DataPoint,
+    book_value_per_share: DataPoint,
+) -> tuple[DataPoint, str | None]:
+    """由股本推算在外流通股數，並以每股淨值交叉驗算。回傳 (股數, 相符的基準)。
 
     台灣的「股本」是**金額**不是股數，換算要除以面額。面額多為 10 元，
     但並非一律如此——直接假設會算出錯的股數，而錯的股數會讓「股本稀釋」
     這個指標無聲地給出錯誤結論，比缺料更糟。
 
-    因此另外用 ``權益 ÷ 每股淨值`` 算第二個估計值：這條路徑與面額無關。
-    兩者相差超過容忍值就代表面額假設不成立，回傳缺料。
-    每股淨值本身有四捨五入，所以容忍值不能太緊。
+    所以另外用 ``權益 ÷ 每股淨值`` 算第二個估計值：這條路徑與面額無關。
+
+    問題是「權益」有兩種。ROE 的分母該用**歸屬於母公司業主之權益**
+    （分子是母公司淨利，兩者必須同基準），但 MOPS 的「每股參考淨值」
+    看來是用**權益總計**算的。只拿母公司權益去對，任何有子公司少數股東的
+    公司都會被判為「面額不是 10 元」——實測退掉 348 檔，約佔全市場 18%，
+    遠超過面額異常的合理比例。範例（1103 嘉泥）：股本推得 832,874,600 股，
+    母公司權益推得 701,385,039 股，比值 0.842 正是母公司權益佔權益總計的比重。
+
+    因此兩種基準都試，任一相符即採用，並回報是哪一種——
+    兩種都對不上的才是真正的面額異常。
     """
     if not share_capital.is_available or share_capital.value in (None, 0):
-        return DataPoint.missing("MOPS 彙總報表未提供股本，無法推算在外流通股數")
+        return DataPoint.missing("MOPS 彙總報表未提供股本，無法推算在外流通股數"), None
 
     by_par = share_capital.value / PAR_VALUE  # type: ignore[operator]
+    accepted = DataPoint.derived(by_par, inputs=[share_capital])
 
-    if (
-        equity.is_available
-        and book_value_per_share.is_available
-        and book_value_per_share.value not in (None, 0)
-    ):
-        by_book = equity.value / book_value_per_share.value  # type: ignore[operator]
-        if by_book > 0 and abs(by_par - by_book) / by_book > SHARE_COUNT_TOLERANCE:
-            return DataPoint.missing(
-                f"股本 ÷ 面額 {PAR_VALUE:g} 元推得 {by_par:,.0f} 股，"
-                f"但權益 ÷ 每股淨值推得 {by_book:,.0f} 股，"
-                "差距過大（面額可能非 10 元），不採用推估股數"
-            )
+    if not book_value_per_share.is_available or book_value_per_share.value in (None, 0):
+        return accepted, None  # 沒有第二意見就不能反過來否定第一個。
 
-    return DataPoint.derived(by_par, inputs=[share_capital])
+    bvps = book_value_per_share.value
+    candidates: list[tuple[str, float]] = []
+    for label, equity in (("母公司權益", parent_equity), ("權益總計", total_equity)):
+        if equity.is_available and equity.value is not None:
+            by_book = equity.value / bvps  # type: ignore[operator]
+            if by_book > 0:
+                candidates.append((label, by_book))
+
+    if not candidates:
+        return accepted, None
+
+    for label, by_book in candidates:
+        if abs(by_par - by_book) / by_book <= SHARE_COUNT_TOLERANCE:
+            return accepted, label
+
+    detail = "、".join(f"{label} ÷ 每股淨值推得 {value:,.0f} 股" for label, value in candidates)
+    return (
+        DataPoint.missing(
+            f"股本 ÷ 面額 {PAR_VALUE:g} 元推得 {by_par:,.0f} 股，"
+            f"但{detail}，兩種權益基準皆不相符"
+            "（面額可能非 10 元），不採用推估股數"
+        ),
+        None,
+    )
 
 @dataclass
 class MopsClient:
@@ -238,6 +266,12 @@ class MopsClient:
     config: dict = field(default_factory=dict)
     schema_watch: SchemaWatch = field(default_factory=lambda: SchemaWatch("MOPS 彙總報表"))
     warnings: list[str] = field(default_factory=list)
+    share_count_bases: dict[str, str] = field(default_factory=dict)
+    """股數驗算是靠哪一種權益基準通過的，``{股號: 基準}``。
+
+    分佈本身就是診斷：若絕大多數靠「權益總計」通過，就證實 MOPS 的
+    每股參考淨值是用權益總計算的，而不是母公司權益。
+    """
     share_count_rejections: dict[str, str] = field(default_factory=dict)
     """交叉驗算不通過而被退掉的股數，``{股號: 原因}``。
 
@@ -362,6 +396,9 @@ class MopsClient:
                         header, row, candidates, provenance, scale=scale, label=field_name
                     ),
                 )
+            # 權益總計在覆蓋前先留一份：ROE 要用母公司權益（分子分母同基準），
+            # 但股數驗算要用 MOPS 算每股參考淨值時所用的那一個——兩者不同。
+            consolidated_equity = sheet.total_equity
             parent_equity = self._point(
                 header, row, EQUITY_PARENT, provenance, scale=THOUSAND,
                 label="歸屬於母公司業主之權益",
@@ -372,9 +409,14 @@ class MopsClient:
             share_capital = self._point(
                 header, row, SHARE_CAPITAL, provenance, scale=THOUSAND, label="股本",
             )
-            sheet.shares_outstanding = _share_count(
-                share_capital, sheet.total_equity, sheet.book_value_per_share
+            sheet.shares_outstanding, basis = _share_count(
+                share_capital,
+                sheet.total_equity,
+                consolidated_equity,
+                sheet.book_value_per_share,
             )
+            if basis:
+                self.share_count_bases[row[0]] = basis
             if share_capital.is_available and not sheet.shares_outstanding.is_available:
                 self.share_count_rejections[row[0]] = (
                     f"{period}：{sheet.shares_outstanding.unavailable_reason}"
@@ -409,6 +451,56 @@ class MopsClient:
     # 批次回補
     # ------------------------------------------------------------------
 
+    def reconcile_share_counts(self, history: "MopsHistory") -> None:
+        """用三條互相獨立的路徑決定股數，取彼此印證的那一組。
+
+        股本 ÷ 面額 一度是唯一的來源，但它疊了兩個假設：面額是 10 元，
+        而且股本裡只有普通股。兩個假設任一不成立就會算出偏大的股數，
+        而偏大的股數會讓 DCF 的每股價值等比例偏小、每股淨值等比例失真——
+        都不會報錯。
+
+        實測（2026-08-18，全市場約 2,250 家）：以母公司權益驗算通過 1,931 家、
+        以權益總計通過 22 家、兩者皆不符 298 家。其中 1103 嘉泥的三個數字是
+        股本 832,874,600、母公司權益 701,385,039、權益總計 704,559,430——
+        兩條權益路徑只差 0.45%，落單的是股本那一條。
+
+        所以不再預設「股本說了算」：三條路徑中只要有兩條互相印證就採用它們，
+        落單的那條被否決。全部互不相符時才回缺料。
+        """
+        for stock_id, by_period in history.balances.items():
+            incomes = history.incomes.get(stock_id) or {}
+            for period, sheet in by_period.items():
+                income = incomes.get(period)
+                if income is None:
+                    continue
+                by_earnings = _shares_from_earnings(income)
+                if by_earnings is None or by_earnings.value is None:
+                    continue
+
+                current = sheet.shares_outstanding
+                if current.is_available and current.value:
+                    agree = abs(current.value - by_earnings.value) / by_earnings.value
+                    if agree <= SHARE_COUNT_TOLERANCE:
+                        continue  # 兩條路徑一致，維持原值。
+
+                # 股本路徑落單。改由帳面路徑與盈餘路徑互相印證。
+                bvps = sheet.book_value_per_share
+                by_book = None
+                if (
+                    sheet.total_equity.is_available
+                    and sheet.total_equity.value is not None
+                    and bvps.is_available
+                    and bvps.value not in (None, 0)
+                ):
+                    by_book = sheet.total_equity.value / bvps.value  # type: ignore[operator]
+
+                if by_book and abs(by_book - by_earnings.value) / by_earnings.value <= (
+                    SHARE_COUNT_TOLERANCE
+                ):
+                    sheet.shares_outstanding = by_earnings
+                    self.share_count_bases[stock_id] = "淨利÷EPS＝權益÷每股淨值"
+                    self.share_count_rejections.pop(stock_id, None)
+
     def backfill(self, today: date | None = None) -> "MopsHistory":
         """把 N 年份的三張表抓齊，建成 {股號: {期別: 報表}} 索引。"""
         if not self.is_available:
@@ -441,6 +533,15 @@ class MopsClient:
                         )
                     history.add(kind, parsed)
 
+        self.reconcile_share_counts(history)
+
+        if self.share_count_bases:
+            tally: dict[str, int] = {}
+            for basis in self.share_count_bases.values():
+                tally[basis] = tally.get(basis, 0) + 1
+            spread = "、".join(f"{basis} {count} 檔" for basis, count in sorted(tally.items()))
+            self.warnings.append(f"MOPS 股數驗算通過的權益基準分佈：{spread}")
+
         if self.share_count_rejections:
             codes = sorted(self.share_count_rejections)
             sample = self.share_count_rejections[codes[0]]
@@ -450,6 +551,25 @@ class MopsClient:
                 f"而該路徑無驗算，每股估值須留意。範例（{codes[0]}）：{sample}"
             )
         return history
+
+
+
+def _shares_from_earnings(income: IncomeStatement) -> DataPoint | None:
+    """淨利 ÷ EPS。第三條與面額無關的股數路徑，而且是市場實際用的基準。
+
+    EPS 只有兩位小數，所以絕對值太小的期別精度不夠——每股 0.10 元的
+    四捨五入就是 ±5%，比容忍值還大。這種期別寧可不表態。
+    """
+    if not income.net_income.is_available or income.net_income.value is None:
+        return None
+    if not income.eps.is_available or income.eps.value in (None, 0):
+        return None
+    if abs(income.eps.value) < MIN_EPS_FOR_SHARE_COUNT:  # type: ignore[arg-type]
+        return None
+    shares = income.net_income.value / income.eps.value  # type: ignore[operator]
+    if shares <= 0:
+        return None
+    return DataPoint.derived(shares, inputs=[income.net_income, income.eps])
 
 
 @dataclass
