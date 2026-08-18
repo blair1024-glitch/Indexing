@@ -210,6 +210,15 @@ def _etf_tiles(run: AnalysisRun) -> str:
 def _score_changes(run: AnalysisRun) -> str:
     parts = ["<h2>📈 評分變化</h2>"]
     significant = run.significant_changes
+
+    if run.basis_changed_count:
+        parts.append(
+            "<div class='card'><p class='warn'>⚠️ 本次有 "
+            f"<strong>{run.basis_changed_count} 檔</strong>的可評分基準改變"
+            "（資料可得性變動使分母位移），這些公司的總分不可與上次直接比較，"
+            "因此不列為評分變化。</p></div>"
+        )
+
     if not significant:
         parts.append(
             "<div class='card'><p class='empty'>與上次執行相比，沒有成分股出現顯著的評分變化。</p></div>"

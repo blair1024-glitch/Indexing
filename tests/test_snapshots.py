@@ -161,3 +161,77 @@ class TestFinancialChanges:
     def test_no_quarterly_data_yields_annual_only(self):
         changes = financial_changes(demo.build_company(), [])
         assert all("年度" in c.label for c in changes)
+
+
+class TestMeasurementBasisChange:
+    """可評分分母會因為資料可得性而變動——補上一個來源、或某來源當天被擋。
+
+    分母一動，每一檔的總分都會整體位移。把那當成基本面變化來歸因，
+    等於憑空製造一整批假訊號，而且是最有說服力的那種假訊號：
+    數字真的變了、歸因也言之成理，只是講的不是同一件事。
+    """
+
+    def _entry(self, *, score: float, scorable: float) -> dict:
+        return {
+            "stock_id": "5269",
+            "name": "祥碩科技",
+            "total_score": score,
+            "scorable_max": scorable,
+            "grade": "B",
+            "components": {
+                "management": {"label": "Management", "normalized": 15.0},
+            },
+            "red_flags": {"triggered": []},
+        }
+
+    def _diff(self, before: dict, after: dict):
+        from buffett00929.snapshots import Snapshot, diff_snapshots
+
+        previous = Snapshot(run_date=date(2026, 8, 16), constituents={}, companies=[before])
+        current = Snapshot(run_date=date(2026, 8, 17), constituents={}, companies=[after])
+        return diff_snapshots(current, previous)[0]
+
+    def test_a_denominator_shift_is_not_reported_as_a_finding(self):
+        change = self._diff(
+            self._entry(score=66.9, scorable=85.0),
+            self._entry(score=72.4, scorable=100.0),
+        )
+        assert change.basis_changed
+        assert not change.is_significant
+
+    def test_the_explanation_says_the_basis_moved(self):
+        change = self._diff(
+            self._entry(score=66.9, scorable=85.0),
+            self._entry(score=72.4, scorable=100.0),
+        )
+        assert "衡量基準改變" in change.explanation
+        assert "85" in change.explanation and "100" in change.explanation
+
+    def test_the_headline_is_marked(self):
+        change = self._diff(
+            self._entry(score=66.9, scorable=85.0),
+            self._entry(score=72.4, scorable=100.0),
+        )
+        assert "基準改變" in change.headline
+
+    def test_same_basis_keeps_the_normal_attribution(self):
+        """分母沒動時行為完全不變——這個修正不能把真實變化也一起壓掉。"""
+        change = self._diff(
+            self._entry(score=60.0, scorable=100.0),
+            self._entry(score=72.4, scorable=100.0),
+        )
+        assert not change.basis_changed
+        assert change.is_significant
+        assert "衡量基準" not in change.explanation
+
+    def test_red_flags_are_reported_even_when_the_basis_moved(self):
+        """紅旗是狀態不是分數，不受分母影響，絕不能被一起壓掉。"""
+        before = self._entry(score=66.9, scorable=85.0)
+        after = self._entry(score=72.4, scorable=100.0)
+        after["red_flags"] = {
+            "triggered": [{"code": "roe_decline", "label": "ROE 連續下降"}]
+        }
+        change = self._diff(before, after)
+        assert change.basis_changed
+        assert change.is_significant
+        assert change.new_flags

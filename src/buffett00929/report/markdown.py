@@ -149,6 +149,15 @@ def _add_score_changes(add, run: AnalysisRun) -> None:
     add("## 📈 評分變化")
     add("")
     significant = run.significant_changes
+    basis = run.basis_changed_count
+
+    if basis:
+        add(
+            f"> ⚠️ 本次有 **{basis} 檔**的可評分基準改變（資料可得性變動使分母位移），"
+            "這些公司的總分**不可與上次直接比較**，因此不列為評分變化。"
+        )
+        add("")
+
     if not significant:
         add("與上次執行相比，沒有成分股出現顯著的評分變化。")
         add("")

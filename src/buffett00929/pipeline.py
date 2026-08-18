@@ -158,6 +158,16 @@ class AnalysisRun:
         return [c for c in self.score_changes if c.is_significant]
 
     @property
+    def basis_changed_count(self) -> int:
+        """可評分基準改變的檔數。
+
+        這些不列為「顯著變化」——分母動了，總分本來就會整體位移，
+        逐檔列出等於製造一整批假訊號。但也不能完全不提，
+        否則讀者會以為總分可以跨日直接比較。折衷是彙總成一句話。
+        """
+        return sum(1 for c in self.score_changes if c.basis_changed)
+
+    @property
     def data_gap_results(self) -> list[CompanyResult]:
         return [r for r in self.results if r.company.data_gaps or not r.score.is_rankable]
 
