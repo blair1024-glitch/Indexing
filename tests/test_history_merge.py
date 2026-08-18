@@ -376,3 +376,58 @@ class TestShareCountUnitsAgreeAcrossSources:
 
         sheet = client.balance_sheets("3702")[0]
         assert sheet.shares_outstanding.value == pytest.approx(1_000_000.0)
+
+
+class TestShareCountStaysSingleSourced:
+    """成長率序列不能混來源。混了就會憑空長出重大紅旗。
+
+    MOPS 現在會用「淨利 ÷ EPS」修正股本路徑算錯的股數，FinMind 則仍是
+    股本 ÷ 10。兩者對同一家公司給出的基準不同，填進同一條序列後，
+    長華電材（8070）的股本年化成長率變成 −42.9%、長華科技（6548）−55.1%——
+    公司什麼都沒做，只是我們把兩把尺量出來的數字接在一起。
+    """
+
+    def _sheet(self, year: int, shares: float | None, source: str):
+        from buffett00929.models import BalanceSheet, DataPoint, FiscalPeriod
+
+        sheet = BalanceSheet(
+            period=FiscalPeriod(year, 0),
+            total_assets=DataPoint.of(1e10, source),
+            total_equity=DataPoint.of(8e9, source),
+        )
+        if shares is not None:
+            sheet.shares_outstanding = DataPoint.of(shares, source)
+        return sheet
+
+    def test_finmind_does_not_fill_a_share_count_mops_already_verified(self):
+        """MOPS 驗過這家公司的股數，FinMind 那把尺就不准進同一條序列。"""
+        from buffett00929.loader import drop_conflicting_share_counts
+
+        official = [self._sheet(2022, 7.0e8, "MOPS 彙總報表 t163sb04")]
+        incoming = [
+            self._sheet(2023, 7.3e7, "FinMind:TaiwanStockBalanceSheet"),
+            self._sheet(2024, 7.3e7, "FinMind:TaiwanStockBalanceSheet"),
+        ]
+        drop_conflicting_share_counts(official, incoming)
+        assert all(not s.shares_outstanding.is_available for s in incoming)
+        reason = incoming[0].shares_outstanding.unavailable_reason or ""
+        assert "MOPS" in reason
+
+    def test_other_fields_are_untouched(self):
+        """只擋股數。FinMind 補的流動資產、資本支出等細項照常進來。"""
+        from buffett00929.loader import drop_conflicting_share_counts
+
+        official = [self._sheet(2022, 7.0e8, "MOPS 彙總報表 t163sb04")]
+        incoming = [self._sheet(2023, 7.3e7, "FinMind:TaiwanStockBalanceSheet")]
+        drop_conflicting_share_counts(official, incoming)
+        assert incoming[0].total_assets.is_available
+        assert incoming[0].total_equity.is_available
+
+    def test_finmind_still_fills_when_mops_never_had_a_count(self):
+        """MOPS 完全沒給股數時，FinMind 是唯一來源，不能一起擋掉。"""
+        from buffett00929.loader import drop_conflicting_share_counts
+
+        official = [self._sheet(2022, None, "MOPS 彙總報表 t163sb05")]
+        incoming = [self._sheet(2023, 7.3e7, "FinMind:TaiwanStockBalanceSheet")]
+        drop_conflicting_share_counts(official, incoming)
+        assert incoming[0].shares_outstanding.is_available
