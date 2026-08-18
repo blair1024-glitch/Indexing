@@ -345,3 +345,88 @@ class TestNormalizationGuard:
         company = self._company([9.0] * 5, dividends=[7.0, 7.2, 7.5])
         method = _method_dividend_yield(company, self._config())
         assert method.value_per_share.is_available
+
+
+class TestDispersionGate:
+    """兩種方法差 7 倍不叫交叉驗證。
+
+    實例：長華電材（8070）殖利率法 49.1 元、DCF 368.1 元，中位數 208.6 元，
+    對上 49.5 元的股價得出 +76% 安全邊際、滿分 10/10，並登上「最便宜」榜首。
+    分歧 76% 只被寫成一句註解，完全沒有影響評分。
+    """
+
+    def _diverging(self):
+        # EPS 衰退擋掉 normalized_pe 與 PEG，只剩殖利率法與 DCF；
+        # 股數偏小讓 DCF 每股價值遠高於殖利率法——正是 8070 的形狀。
+        return demo.build_company(eps_growth=-0.20, shares=0.5e8)
+
+    def test_wild_disagreement_refuses_to_score(self, config):
+        result = valuation_module.estimate_valuation(self._diverging(), config.scoring)
+        assert result.dispersion.value > 0.60
+        assert not result.margin_of_safety.is_available
+        assert not result.intrinsic_value.is_available
+        assert "分歧" in (result.margin_of_safety.unavailable_reason or "")
+
+    def test_dispersion_is_still_reported(self, config):
+        """拒絕計分不等於藏起來——讀者要看得到分歧多少。"""
+        result = valuation_module.estimate_valuation(self._diverging(), config.scoring)
+        assert result.dispersion.is_available
+        assert result.dispersion_warning
+
+    def test_ordinary_disagreement_still_scores(self, config):
+        """四種方法齊備時分歧約 48%，屬正常範圍，不得被這道閘門波及。"""
+        result = valuation_module.estimate_valuation(demo.build_company(), config.scoring)
+        assert 0.40 < result.dispersion.value <= 0.60
+        assert result.dispersion_warning
+        assert result.margin_of_safety.is_available
+
+
+class TestShareCountCrossCheck:
+    """股數與現金流不在同一基準上時，DCF 會給出漂亮但錯誤的每股價值。
+
+    8070 的 DCF 隱含每股自由現金流 29.3 元、股價 49.5 元——自由現金流殖利率
+    59%，而同一份報表的現金股利只佔那個 FCF 的 8%。兩者不可能同時為真。
+    """
+
+    def _company(self, shares: float, bvps: float | None = None, year: int = 2025):
+        from buffett00929.models import (
+            BalanceSheet, Company, DataPoint, FiscalPeriod,
+        )
+
+        company = Company(stock_id="8070", name="長華電材")
+        sheet = BalanceSheet(
+            period=FiscalPeriod(year, 0),
+            total_assets=DataPoint.of(4e10, "MOPS"),
+            total_equity=DataPoint.of(2.66e10, "MOPS"),
+            shares_outstanding=DataPoint.of(shares, "derived(FinMind:TaiwanStockBalanceSheet)"),
+        )
+        if bvps is not None:
+            sheet.book_value_per_share = DataPoint.of(bvps, "MOPS 彙總報表 t163sb05")
+        company.balance_sheets = [sheet]
+        return company
+
+    def test_share_count_contradicted_by_book_value_is_refused(self):
+        # 權益 266 億 ÷ 每股淨值 96.7 元 ≈ 2.75 億股，但股數欄位只有 0.724 億股。
+        company = self._company(shares=7.24e7, bvps=96.7)
+        result = valuation_module.share_count(company)
+        assert not result.is_available
+        reason = result.unavailable_reason or ""
+        assert "每股淨值" in reason and "72,400,000" in reason
+
+    def test_agreeing_share_count_passes(self):
+        company = self._company(shares=2.75e8, bvps=96.7)
+        assert valuation_module.share_count(company).value == pytest.approx(2.75e8)
+
+    def test_no_book_value_means_no_verdict(self):
+        """缺每股淨值時不能反過來把好的股數也擋掉。"""
+        company = self._company(shares=7.24e7, bvps=None)
+        assert valuation_module.share_count(company).is_available
+
+    def test_dcf_names_the_share_count_it_used(self, config):
+        """這次查不出問題，就是因為假設欄只印基期 FCF，不印股數。"""
+        result = valuation_module.estimate_valuation(
+            demo.build_company(shares=3.06e8), config.scoring
+        )
+        dcf = next(m for m in result.methods if m.key == "dcf")
+        assert "股數" in dcf.assumptions
+        assert "3.06" in dcf.assumptions or "306,000,000" in dcf.assumptions
