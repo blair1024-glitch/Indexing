@@ -365,6 +365,11 @@ BALANCE_WITH_CAPITAL = """
     <td>10,000</td><td>500,000</td>
     <td>2,000,000</td><td>2,000,000</td><td>1000.00</td>
   </tr>
+  <tr>
+    <td>1103</td><td>非控制權益</td><td>3,000,000</td><td>1,000,000</td>
+    <td>10,000</td><td>500,000</td>
+    <td>1,684,000</td><td>2,000,000</td><td>2000.00</td>
+  </tr>
 </table></td></tr></table>
 """
 
@@ -401,6 +406,34 @@ class TestShareCount:
     def test_absent_share_capital_is_missing(self, client):
         parsed = client.parse_balance(BALANCE_HTML, Q1, TODAY)
         assert not parsed["2330"].shares_outstanding.is_available
+
+    def test_a_minority_interest_does_not_look_like_a_wrong_par_value(self, client):
+        """MOPS 的每股參考淨值是用**權益總計**算的，我們拿的是母公司權益。
+
+        兩者差的就是非控制權益，所以只要公司有子公司少數股東，驗算就過不了——
+        實測退掉了 348 檔，約佔全市場 18%，遠超過「面額不是 10 元」的合理比例。
+        範例（1103 嘉泥）：股本推得 832,874,600 股，母公司權益推得 701,385,039 股，
+        比值 0.842 正好是母公司權益佔權益總計的比重。
+        """
+        parsed = client.parse_balance(BALANCE_WITH_CAPITAL, Q1, TODAY)
+        shares = parsed["1103"].shares_outstanding
+        assert shares.is_available
+        assert shares.value == pytest.approx(1_000_000)
+        assert "1103" not in client.share_count_rejections
+
+    def test_the_basis_that_matched_is_recorded(self, client):
+        """一次執行就要能回答「是哪一種基準相符」，否則只能再猜一輪。"""
+        client.parse_balance(BALANCE_WITH_CAPITAL, Q1, TODAY)
+        assert client.share_count_bases["1103"] == "權益總計"
+        assert client.share_count_bases["2330"] == "母公司權益"
+
+    def test_neither_basis_matching_is_still_refused(self, client):
+        """兩種基準都對不上才是真的面額異常——那個退件必須保留。"""
+        parsed = client.parse_balance(BALANCE_WITH_CAPITAL, Q1, TODAY)
+        shares = parsed["9999"].shares_outstanding
+        assert not shares.is_available
+        reason = shares.unavailable_reason or ""
+        assert "母公司權益" in reason and "權益總計" in reason
 
     def test_a_rejected_share_count_is_recorded_not_silently_dropped(self, client):
         """退件是對的，但退完會沉默地回退到 FinMind 的股本——那條路徑沒有驗算。
