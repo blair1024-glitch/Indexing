@@ -331,3 +331,63 @@ class TestShareCountGrowthNeedsOneRuler:
         result = balance.share_count_growth(company)
         assert result.is_available
         assert result.value == pytest.approx(0.0323, abs=0.005)
+
+
+class TestTheTwoShareCountGuardsTogether:
+    """移除合併層的封殺之後，序列會恢復成「MOPS 多年 + FinMind 最新一年」。
+
+    這正是實際的資料形狀，也是我上次沒驗到的地方：只確認稀釋率分佈改善，
+    沒檢查別的東西有沒有跟著動——結果 DCF 在 50 檔全數消失。
+    兩道守門必須在這個形狀下同時成立。
+    """
+
+    def _company(self, series):
+        from buffett00929.models import BalanceSheet, Company, DataPoint, FiscalPeriod
+
+        company = Company(stock_id="8070", name="長華電材")
+        company.balance_sheets = [
+            BalanceSheet(
+                period=FiscalPeriod(year, 0),
+                shares_outstanding=DataPoint.of(shares, source),
+            )
+            for year, shares, source in series
+        ]
+        return company
+
+    def _realistic(self):
+        mops = "MOPS 彙總報表 t163sb05"
+        return self._company([
+            (2021, 1.00e8, mops),
+            (2022, 1.02e8, mops),
+            (2023, 1.04e8, mops),
+            (2024, 1.06e8, mops),
+            (2025, 1.08e8, mops),
+            (2026, 7.30e7, "FinMind:TaiwanStockBalanceSheet"),
+        ])
+
+    def test_dilution_ignores_the_finmind_tail(self):
+        """成長率在最長的同基準區段內衡量，換尺的那一年不參與。"""
+        from buffett00929.metrics import balance
+
+        result = balance.share_count_growth(self._realistic())
+        assert result.is_available
+        assert result.value == pytest.approx(0.0194, abs=0.003)
+
+    def test_the_dcf_still_gets_a_share_count(self):
+        """DCF 讀的是**最新年度**——那一期只有 FinMind，擋掉它 DCF 就整個不見。"""
+        from buffett00929.scoring.valuation import share_count
+
+        result = share_count(self._realistic())
+        assert result.is_available
+        assert result.value == pytest.approx(7.30e7)
+
+    def test_a_contradicted_latest_count_is_still_refused(self):
+        """恢復 FinMind 不等於放行錯誤股數——使用前仍要與每股淨值對帳。"""
+        from buffett00929.models import DataPoint
+        from buffett00929.scoring.valuation import share_count
+
+        company = self._realistic()
+        latest = company.balance_sheets[-1]
+        latest.total_equity = DataPoint.of(2.66e10, "MOPS")
+        latest.book_value_per_share = DataPoint.of(96.7, "MOPS")
+        assert not share_count(company).is_available
