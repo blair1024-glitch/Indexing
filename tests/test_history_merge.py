@@ -399,38 +399,37 @@ class TestShareCountStaysSingleSourced:
             sheet.shares_outstanding = DataPoint.of(shares, source)
         return sheet
 
-    def test_finmind_does_not_fill_a_share_count_mops_already_verified(self):
-        """MOPS 驗過這家公司的股數，FinMind 那把尺就不准進同一條序列。"""
-        from buffett00929.loader import drop_conflicting_share_counts
+    def test_finmind_still_fills_periods_mops_does_not_reach(self):
+        """封殺 FinMind 的股數會把 DCF 整個弄不見——實測 50 檔全滅。
+
+        擋掉的理由是「成長率序列不能混來源」，但那個問題已經由
+        ``metrics/balance._longest_single_basis_run`` 在計算成長率的地方解決了。
+        在合併層面全面封殺是多餘的，代價卻是 ``valuation.share_count()``
+        讀的是**最新年度**資產負債表——MOPS 的驗證股數涵蓋不到那一期，
+        FinMind 又被擋住，於是每一家公司都「缺在外流通股數」，DCF 全數消失。
+
+        序列有缺口好過序列被汙染；但**把唯一的來源也擋掉**不是缺口，是自殘。
+        """
+        from buffett00929.loader import _merge_statement
+        from buffett00929.models import Company
 
         official = [self._sheet(2022, 7.0e8, "MOPS 彙總報表 t163sb04")]
-        incoming = [
-            self._sheet(2023, 7.3e7, "FinMind:TaiwanStockBalanceSheet"),
-            self._sheet(2024, 7.3e7, "FinMind:TaiwanStockBalanceSheet"),
-        ]
-        drop_conflicting_share_counts(official, incoming)
-        assert all(not s.shares_outstanding.is_available for s in incoming)
-        reason = incoming[0].shares_outstanding.unavailable_reason or ""
-        assert "MOPS" in reason
+        incoming = self._sheet(2026, 7.3e8, "FinMind:TaiwanStockBalanceSheet")
+        _merge_statement(official, incoming, Company(stock_id="8070", name="長華電材"),
+                         "資產負債表", overwrite=False)
+        latest = [s for s in official if s.period.year == 2026][0]
+        assert latest.shares_outstanding.is_available
 
-    def test_other_fields_are_untouched(self):
-        """只擋股數。FinMind 補的流動資產、資本支出等細項照常進來。"""
-        from buffett00929.loader import drop_conflicting_share_counts
+    def test_mops_still_wins_the_same_period(self):
+        """官方優先不變：同一期別 MOPS 有值時 FinMind 不得覆蓋。"""
+        from buffett00929.loader import _merge_statement
+        from buffett00929.models import Company
 
         official = [self._sheet(2022, 7.0e8, "MOPS 彙總報表 t163sb04")]
-        incoming = [self._sheet(2023, 7.3e7, "FinMind:TaiwanStockBalanceSheet")]
-        drop_conflicting_share_counts(official, incoming)
-        assert incoming[0].total_assets.is_available
-        assert incoming[0].total_equity.is_available
-
-    def test_finmind_still_fills_when_mops_never_had_a_count(self):
-        """MOPS 完全沒給股數時，FinMind 是唯一來源，不能一起擋掉。"""
-        from buffett00929.loader import drop_conflicting_share_counts
-
-        official = [self._sheet(2022, None, "MOPS 彙總報表 t163sb05")]
-        incoming = [self._sheet(2023, 7.3e7, "FinMind:TaiwanStockBalanceSheet")]
-        drop_conflicting_share_counts(official, incoming)
-        assert incoming[0].shares_outstanding.is_available
+        incoming = self._sheet(2022, 7.3e7, "FinMind:TaiwanStockBalanceSheet")
+        _merge_statement(official, incoming, Company(stock_id="8070", name="長華電材"),
+                         "資產負債表", overwrite=False)
+        assert official[0].shares_outstanding.value == pytest.approx(7.0e8)
 
 
 class TestSingleStockLookup:
