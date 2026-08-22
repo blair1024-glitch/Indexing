@@ -481,3 +481,41 @@ class TestPegOnlySpeaksInsideItsBand:
         method = _method_peg(self._company(-0.05), self._config())
         assert not method.value_per_share.is_available
         assert "PEG 法不適用" in (method.value_per_share.unavailable_reason or "")
+
+
+class TestZeroIsNotAPrice:
+    """股價 0 不是股價，是缺料。當成 0 會讓安全邊際變成 +100%。
+
+    實測（2026-08-22 全市場掃描）：雙美（4728）現價回傳 0.0 元，
+    內在價值 300.1 元，於是安全邊際 =（300.1−0）÷ 300.1 = 100%，
+    直接登上「安全邊際排序」榜首。這是整個專案一路在處理的同一種錯誤——
+    把零當成數據而不是當成缺漏。
+    """
+
+    def _valuation(self, price: float | None):
+        from buffett00929.config import Config
+        from buffett00929.models import DataPoint
+
+        company = demo.build_company()
+        company.market_data.price = (
+            DataPoint.of(price, "TWSE:STOCK_DAY_ALL") if price is not None
+            else DataPoint.missing("未取得股價")
+        )
+        return valuation_module.estimate_valuation(company, Config.load().scoring)
+
+    def test_a_zero_price_yields_no_margin_of_safety(self):
+        result = self._valuation(0.0)
+        assert not result.margin_of_safety.is_available
+        assert "股價" in (result.margin_of_safety.unavailable_reason or "")
+
+    def test_a_negative_price_is_refused_too(self):
+        assert not self._valuation(-5.0).margin_of_safety.is_available
+
+    def test_a_real_price_still_works(self):
+        result = self._valuation(100.0)
+        assert result.margin_of_safety.is_available
+
+    def test_the_intrinsic_value_survives_a_bad_price(self):
+        """股價有問題不該讓估值本身消失——內在價值仍然算得出來。"""
+        result = self._valuation(0.0)
+        assert result.intrinsic_value.is_available

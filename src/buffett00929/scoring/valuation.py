@@ -514,9 +514,17 @@ def estimate_valuation(company: Company, scoring_config: dict) -> Valuation:
     )
 
     price = company.market_data.price
-    if not price.is_available or price.value is None:
-        valuation.margin_of_safety = DataPoint.missing("缺股價，無法計算安全邊際")
-        valuation.note = "已估算內在價值，但缺最新股價，無法計算安全邊際"
+    # 股價 ≤ 0 不是股價，是缺料。實測（2026-08-22 全市場掃描）雙美（4728）
+    # 回傳 0.0 元，內在價值 300.1 元，安全邊際就成了（300.1−0）÷300.1＝100%，
+    # 直接登上安全邊際榜首。把零當數據而不是當缺漏，是這個專案一路在防的錯誤。
+    if not price.is_available or price.value is None or price.value <= 0:
+        reason = (
+            "股價為 0 或負值，視同未取得，無法計算安全邊際"
+            if price.is_available and price.value is not None
+            else "缺股價，無法計算安全邊際"
+        )
+        valuation.margin_of_safety = DataPoint.missing(reason)
+        valuation.note = f"已估算內在價值，但{reason}"
         return valuation
 
     if median_value <= 0:
