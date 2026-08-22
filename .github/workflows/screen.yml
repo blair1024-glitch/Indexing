@@ -78,8 +78,10 @@ jobs:
 
           # 分析期間分支可能已被推了新的 commit（每日更新會寫產出物）。
           # 直接 push 會被拒，整份結果就白算了。把 HEAD 對齊遠端再重新 commit：
-          # --soft 只移動 HEAD，工作目錄裡剛產生的檔案原封不動。
-          # 理由與 daily-update.yml 相同，那裡有完整說明。
+          # 用 --mixed（git reset 的預設）：索引一併對齊遠端，工作目錄裡
+          # 剛產生的檔案原封不動。**不可改成 --soft**——那會讓索引停在
+          # checkout 當下的舊樹，把執行期間被推上遠端的新檔案記成刪除。
+          # 完整理由與兩次實際損失記在 daily-update.yml。
           BRANCH="${{ github.ref_name }}"
           git fetch origin "$BRANCH"
           git reset "origin/$BRANCH"
