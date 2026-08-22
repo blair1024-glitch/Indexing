@@ -49,6 +49,32 @@ class ScreenResult:
     run_date: date = field(default_factory=date.today)
     warnings: list[str] = field(default_factory=list)
 
+    DEGRADED_BELOW = 0.50
+    """估值覆蓋率低於此值即視為該次執行資料不完整，需在報表最上方標示。"""
+
+    @property
+    def valuation_coverage(self) -> float:
+        """第二階段裡真的算出安全邊際的比例。"""
+        if not self.valued:
+            return 0.0
+        usable = sum(
+            1 for r in self.valued if r.score.valuation.margin_of_safety.is_available
+        )
+        return usable / len(self.valued)
+
+    @property
+    def is_degraded(self) -> bool:
+        """這次執行的估值資料是否明顯不完整。
+
+        來源被限流的執行，和「這些公司本來就估不出價」長得一模一樣：
+        兩者都是一批「僅 0 種估值方法可用」。差別在於前者換個時間重跑就會有，
+        後者不會——而讀者無從分辨，只會以為市場上沒有便宜的好公司。
+
+        實測：連續三次掃描把 FinMind 額度用光後，50 家裡 48 家估不出價、
+        兩檔 BUY 候選整個消失，報表卻照樣自信地呈現結果。
+        """
+        return bool(self.valued) and self.valuation_coverage < self.DEGRADED_BELOW
+
     @property
     def buy_candidates(self) -> list[CompanyResult]:
         from .scoring.engine import VERDICT_BUY

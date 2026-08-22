@@ -523,7 +523,14 @@ def render_screen(result: "ScreenResult") -> str:
     add(f"> 第二階段只對品質最高的 **{stage_two} 家**補齊估值（FinMind 逐檔查詢有速率上限，"
         "無法對全市場執行）。因此**「沒有 BUY」的意思是這 "
         f"{stage_two} 家裡沒有，不是全市場沒有**。")
-    add("")
+    if result.is_degraded:
+        add(f"> ⚠️ **這次執行的估值資料不完整。** 第二階段 {stage_two} 家中只有 "
+            f"{result.valuation_coverage:.0%} 算得出安全邊際——"
+            "通常代表 FinMind 的股利與歷史本益比未取得（逐檔查詢有速率上限，"
+            "短時間內重複執行會用盡額度）。**這不是「市場上沒有便宜的好公司」，"
+            "是這一次沒拿到資料**；換個時間重跑即可。下方的 BUY 候選與安全邊際"
+            "排序在本次執行中不具代表性。")
+        add("")
 
     add("## 🟢 BUY 候選")
     add("")

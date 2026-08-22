@@ -122,3 +122,56 @@ class TestQualityRanking:
         loader.history.names["9999"] = "空殼"
         ranked = rank_by_quality(loader, Config.load(), today=TODAY)
         assert "9999" not in [r.company.stock_id for r in ranked]
+
+
+class TestADegradedRunSaysSo:
+    """來源被限流的執行看起來和「這些公司本來就估不出價」一模一樣。
+
+    實測：連續跑三次掃描把 FinMind 額度用光之後，50 家裡 48 家變成
+    「僅 0 種估值方法可用」，兩檔 BUY 候選整個消失，而報表照樣自信地
+    列出結果，只在最下面的警告區塊提了一句。讀者會以為市場上沒有便宜的好公司，
+    實際上是我們那次沒拿到股利與歷史本益比。
+
+    覆蓋率低於門檻時必須在**最上面**講明白，而不是留給讀者自己推理。
+    """
+
+    def _result(self, usable: int, total: int = 50):
+        from buffett00929.models import DataPoint
+        from buffett00929.pipeline import CompanyResult
+        from buffett00929.screen import ScreenResult
+        from buffett00929.redflags import RedFlagReport
+        from buffett00929.scoring.engine import CompanyScore
+        from buffett00929.scoring.valuation import Valuation
+
+        valued = []
+        for i in range(total):
+            valuation = Valuation()
+            valuation.margin_of_safety = (
+                DataPoint.of(0.1, "derived") if i < usable
+                else DataPoint.missing("僅 0 種估值方法可用")
+            )
+            score = CompanyScore(
+                company=None, metrics=None, valuation=valuation,  # type: ignore[arg-type]
+                red_flags=RedFlagReport(),
+            )
+            valued.append(
+                CompanyResult(score=score, verdict="", verdict_reason="",
+                              seven_year="", seven_year_reason="", conclusion="")
+            )
+        return ScreenResult(valued=valued, universe_size=1975)
+
+    def test_a_mostly_unvalued_batch_is_flagged(self):
+        result = self._result(usable=2)
+        assert result.is_degraded
+        assert result.valuation_coverage < 0.10
+
+    def test_a_healthy_batch_is_not_flagged(self):
+        assert not self._result(usable=40).is_degraded
+
+    def test_the_banner_appears_at_the_top_of_the_report(self):
+        from buffett00929.report.markdown import render_screen
+
+        text = render_screen(self._result(usable=0))
+        head = text.split("## ")[0]
+        assert "資料不完整" in head
+        assert "FinMind" in head
