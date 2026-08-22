@@ -534,7 +534,7 @@ def render_screen(result: "ScreenResult") -> str:
         for i, r in enumerate(candidates, 1):
             mos = r.score.valuation.margin_of_safety
             add(f"| {i} | {r.company.name} | {r.company.stock_id} | "
-                f"{r.score.total_score:.1f} | {r.score.grade} | "
+                f"{r.score.total_score:.1f} | {r.score.grade[0]} | "
                 f"{mos.value:+.1%} | {r.seven_year} |")
     else:
         add(f"這 {stage_two} 家補齊估值的公司中，沒有同時滿足"
@@ -550,7 +550,7 @@ def render_screen(result: "ScreenResult") -> str:
         for i, r in enumerate(with_mos[:20], 1):
             mos = r.score.valuation.margin_of_safety
             add(f"| {i} | {r.company.name} | {r.company.stock_id} | "
-                f"{r.score.total_score:.1f} | {r.score.grade} | "
+                f"{r.score.total_score:.1f} | {r.score.grade[0]} | "
                 f"{mos.value:+.1%} | {r.verdict} |")
         unmeasured = stage_two - len(with_mos)
         if unmeasured:

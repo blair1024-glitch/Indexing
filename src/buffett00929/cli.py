@@ -69,8 +69,9 @@ def main(argv: list[str] | None = None) -> int:
 
 def _cmd_screen(config: Config, args) -> int:
     """全市場掃描。第一階段不花 FinMind 額度，第二階段只補前 N 名。"""
-    from .report.markdown import render_screen
+    from .report.markdown import render_company, render_screen
     from .screen import screen_market
+    from .sources.constituents import ConstituentSet
 
     repo_root: Path = args.repo_root
     result = screen_market(config, repo_root, top_n=args.top)
@@ -82,6 +83,24 @@ def _cmd_screen(config: Config, args) -> int:
     path = repo_root / "reports" / "screen.md"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(render_screen(result), encoding="utf-8")
+
+    # 逐檔報表：BUY 候選是整份掃描最該被檢查的東西，只給一行摘要
+    # 等於要讀者相信結論而看不到依據。第二階段的每一檔都寫出來。
+    from .pipeline import AnalysisRun
+
+    lookup_dir = repo_root / "reports" / "lookup"
+    lookup_dir.mkdir(parents=True, exist_ok=True)
+    for item in result.valued:
+        run = AnalysisRun(
+            run_date=result.run_date,
+            constituents=ConstituentSet(
+                constituents=[], source="全市場掃描", as_of=result.run_date
+            ),
+            results=[item],
+        )
+        (lookup_dir / f"{item.company.stock_id}.md").write_text(
+            render_company(item, run), encoding="utf-8"
+        )
 
     print(f"\n母體 {result.universe_size} 家　補齊估值 {len(result.valued)} 家")
     candidates = result.buy_candidates

@@ -85,7 +85,7 @@ jobs:
           BRANCH="${{ github.ref_name }}"
           git fetch origin "$BRANCH"
           git reset "origin/$BRANCH"
-          git add reports/screen.md
+          git add reports/screen.md reports/lookup
 
           if git diff --cached --quiet; then
             echo "報表沒有變化，不建立 commit。"
@@ -102,7 +102,7 @@ jobs:
             sleep $((2 ** attempt))
             git fetch origin "$BRANCH"
             git reset "origin/$BRANCH"
-            git add reports/screen.md
+            git add reports/screen.md reports/lookup
             git commit -m "chore: 全市場掃描"
           done
           exit 1
