@@ -92,12 +92,20 @@ jobs:
           # 分析要跑十分鐘以上，這段期間分支很可能已經被推了新的 commit。
           # 直接 push 會被拒（non-fast-forward），整份結果就白算了。
           #
-          # 把 HEAD 對齊遠端再重新 commit 產出物即可：--soft 只移動 HEAD，
-          # 工作目錄裡剛產生的檔案原封不動。產出物每次執行都是整份重新生成，
-          # 「最後一次執行說了算」正是正確語意，所以不需要 merge 或 rebase，
-          # 也不會有衝突。只 stage 產出物的路徑，其他檔案的差異不會被帶進 commit。
+          # 把 HEAD 與索引都對齊遠端（--mixed，即預設），再重新 stage 產出物。
+          #
+          # **這裡不能用 --soft。** --soft 只移動 HEAD，索引仍停留在 checkout
+          # 當下那個舊 commit 的樹；任何在執行期間被推上遠端的**新檔案**在那個
+          # 索引裡並不存在，於是下一個 commit 會把它記錄成「刪除」。
+          # 實際發生過兩次：一次刪掉了整個全市場掃描功能（screen.py、
+          # test_screen.py、screen.yml 共 370 行），一次刪掉了剛加的測試。
+          # 兩次都沒有任何錯誤訊息——分析照跑、commit 照推、檔案就是不見了。
+          #
+          # --mixed 讓索引等於遠端，工作目錄裡剛產生的檔案原封不動；
+          # 接著只 stage 產出物路徑，其餘檔案維持遠端的內容。
+          # 產出物每次執行都是整份重新生成，「最後一次執行說了算」正是正確語意。
           git fetch origin "$BRANCH"
-          git reset --soft "origin/$BRANCH"
+          git reset "origin/$BRANCH"
           git add data/snapshots docs reports
 
           if git diff --cached --quiet; then
@@ -128,7 +136,7 @@ jobs:
             echo "推送被拒（第 ${attempt} 次），重新對齊遠端後再試。"
             sleep $((attempt * 3))
             git fetch origin "$BRANCH"
-            git reset --soft "origin/$BRANCH"
+            git reset "origin/$BRANCH"
             git add data/snapshots docs reports
             if git diff --cached --quiet; then
               echo "重新對齊後已無差異（另一次執行寫入了相同結果）。"

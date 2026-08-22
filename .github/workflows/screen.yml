@@ -1,26 +1,27 @@
-name: 個股查詢
+name: 全市場掃描
 
-# 對任意上市櫃股號跑一次巴菲特分析。
+# 兩段式全市場掃描，找出 BUY 候選。
 #
-# 與每日更新走同一條流程、同一套門檻——差別只在「選誰」：
-# 這裡不查 00929 持股名單，直接用你輸入的股號。
-# MOPS 彙總報表本來就是全市場的（約 1,975 家），所以非成分股
-# 拿到的資料品質與成分股相同。
+# 第一階段用彙總報表評估全部約 1,975 家的企業品質——不發出任何逐檔請求，
+# 所以不花 FinMind 額度。第二階段只對品質最高的前 N 名補齊估值。
+#
+# 第一階段要跑近兩千家，比每日更新久得多，因此 timeout 拉長。
 on:
   workflow_dispatch:
     inputs:
-      stock_id:
-        description: 股票代號（例如 2330）
-        required: true
+      top_n:
+        description: 第二階段補齊估值的檔數（留空則用設定檔的 50）
+        required: false
 
 concurrency:
   # 同一檔連按兩次不需要跑兩遍；不同檔可以並行。
-  group: analyse-stock-${{ inputs.stock_id }}
-  cancel-in-progress: true
+  group: screen
+  cancel-in-progress: false
 
 jobs:
-  analyse:
+  screen:
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     permissions:
       contents: write
 
@@ -47,20 +48,22 @@ jobs:
           restore-keys: |
             mops-history-
 
-      - name: 分析個股
-        id: analyse
+      - name: 全市場掃描
+        id: screen
         env:
           FINMIND_TOKEN: ${{ secrets.FINMIND_TOKEN }}
         run: |
           set -o pipefail
-          python -m buffett00929.cli analyse "${{ inputs.stock_id }}" 2>&1 | tee analyse.log
+          ARGS=""
+          if [ -n "${{ inputs.top_n }}" ]; then ARGS="--top ${{ inputs.top_n }}"; fi
+          python -m buffett00929.cli screen $ARGS 2>&1 | tee analyse.log
 
       # 摘要直接放進 job summary，不必點進 log 翻。
       - name: 寫入執行摘要
         if: always()
         run: |
           {
-            echo "## 個股查詢：${{ inputs.stock_id }}"
+            echo "## 全市場掃描"
             echo
             echo '```'
             cat analyse.log 2>/dev/null || echo "（分析未產生輸出）"
@@ -80,14 +83,14 @@ jobs:
           BRANCH="${{ github.ref_name }}"
           git fetch origin "$BRANCH"
           git reset "origin/$BRANCH"
-          git add reports/lookup
+          git add reports/screen.md
 
           if git diff --cached --quiet; then
             echo "報表沒有變化，不建立 commit。"
             exit 0
           fi
 
-          git commit -m "chore: 個股查詢 ${{ inputs.stock_id }}"
+          git commit -m "chore: 全市場掃描"
 
           for attempt in 1 2 3 4; do
             if git push origin "HEAD:$BRANCH"; then
@@ -97,7 +100,7 @@ jobs:
             sleep $((2 ** attempt))
             git fetch origin "$BRANCH"
             git reset "origin/$BRANCH"
-            git add reports/lookup
-            git commit -m "chore: 個股查詢 ${{ inputs.stock_id }}"
+            git add reports/screen.md
+            git commit -m "chore: 全市場掃描"
           done
           exit 1
