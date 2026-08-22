@@ -38,10 +38,6 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("check-config", help="驗證設定檔與指標實作一致性")
     stock = sub.add_parser("analyse", help="對任意上市櫃股號跑一次巴菲特分析")
     stock.add_argument("stock_id", help="股票代號，例如 2330")
-    screen = sub.add_parser("screen", help="全市場兩段式掃描，找出 BUY 候選")
-    screen.add_argument(
-        "--top", type=int, default=None, help="第二階段補齊估值的檔數（預設讀設定檔）"
-    )
 
     args = parser.parse_args(argv)
 
@@ -57,7 +53,6 @@ def main(argv: list[str] | None = None) -> int:
         "verify-sources": _cmd_verify_sources,
         "check-config": _cmd_check_config,
         "analyse": _cmd_analyse,
-        "screen": _cmd_screen,
     }
     return handlers[args.command](config, args)
 
@@ -65,43 +60,6 @@ def main(argv: list[str] | None = None) -> int:
 # --------------------------------------------------------------------------
 # 指令
 # --------------------------------------------------------------------------
-
-
-def _cmd_screen(config: Config, args) -> int:
-    """全市場掃描。第一階段不花 FinMind 額度，第二階段只補前 N 名。"""
-    from .report.markdown import render_screen
-    from .screen import screen_market
-
-    repo_root: Path = args.repo_root
-    result = screen_market(config, repo_root, top_n=args.top)
-
-    if not result.quality_ranked:
-        print("\n彙總報表沒有回傳任何公司，掃描中止。\n", file=sys.stderr)
-        return 3
-
-    path = repo_root / "reports" / "screen.md"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(render_screen(result), encoding="utf-8")
-
-    print(f"\n母體 {result.universe_size} 家　補齊估值 {len(result.valued)} 家")
-    candidates = result.buy_candidates
-    if candidates:
-        print(f"\n🟢 BUY 候選 {len(candidates)} 檔：")
-        for r in candidates:
-            mos = r.score.valuation.margin_of_safety
-            print(f"  {r.company.name}（{r.company.stock_id}）"
-                  f"總分 {r.score.total_score:.1f}　安全邊際 {mos.value:+.1%}")
-    else:
-        print(f"\n這 {len(result.valued)} 家中沒有 BUY 候選"
-              "（注意：不等於全市場沒有——第二階段只涵蓋品質前段班）")
-
-    print("\n企業品質 Top 5（第一階段）：")
-    for r in result.quality_ranked[:5]:
-        print(f"  {r.company.name}（{r.company.stock_id}）"
-              f"品質 {r.score.business_quality_score:.1f}　"
-              f"可評分 {r.score.scorable_max:.0f}")
-    print(f"\n完整報表：{path.relative_to(repo_root)}\n")
-    return 0
 
 
 def _cmd_analyse(config: Config, args) -> int:
