@@ -591,3 +591,31 @@ class TestRetainedEarningsAndCash:
     def test_ending_cash_is_parsed_from_the_cash_flow_statement(self, client):
         parsed = client.parse_cashflow(CASHFLOW_WITH_ENDING, Q1, TODAY)
         assert parsed["2330"].ending_cash.value == pytest.approx(650_000 * 1000)
+
+
+class TestCompanyNames:
+    """彙總報表每一列的第二欄就是公司名稱，原本被丟掉。
+
+    單檔查詢要能對任意股號產生報表，而持股 API 只涵蓋 00929 的 50 檔——
+    其餘 1,900 多家的名稱只能從這裡拿。沒有名稱不會讓分析失敗，
+    但報表標題會變成一個裸的代號，讀者無從確認自己查的是哪一家。
+    """
+
+    def test_names_are_collected_while_parsing(self, client):
+        client.parse_balance(BALANCE_WITH_CAPITAL, Q1, TODAY)
+        assert client.company_names["2330"] == "台積電"
+        assert client.company_names["1104"] == "股本落單"
+
+    def test_names_come_from_the_header_not_a_fixed_column(self, client):
+        """欄位順序換過就靠位置抓會抓錯——用表頭找「公司名稱」。"""
+        html = BALANCE_WITH_CAPITAL.replace(
+            "<td>公司代號</td><td>公司名稱</td>", "<td>公司代號</td><td>公司簡稱</td>"
+        )
+        client.parse_balance(html, Q1, TODAY)
+        assert client.company_names["2330"] == "台積電"
+
+    def test_history_carries_the_names(self, client):
+        history = MopsHistory()
+        history.add("balance", client.parse_balance(BALANCE_WITH_CAPITAL, Q1, TODAY))
+        history.names.update(client.company_names)
+        assert history.names["2330"] == "台積電"

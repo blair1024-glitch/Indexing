@@ -36,6 +36,8 @@ def main(argv: list[str] | None = None) -> int:
         "--stock-id", default="2330", help="用於測試 FinMind 科目對應的股票代號"
     )
     sub.add_parser("check-config", help="驗證設定檔與指標實作一致性")
+    stock = sub.add_parser("analyse", help="對任意上市櫃股號跑一次巴菲特分析")
+    stock.add_argument("stock_id", help="股票代號，例如 2330")
 
     args = parser.parse_args(argv)
 
@@ -50,6 +52,7 @@ def main(argv: list[str] | None = None) -> int:
         "demo": _cmd_demo,
         "verify-sources": _cmd_verify_sources,
         "check-config": _cmd_check_config,
+        "analyse": _cmd_analyse,
     }
     return handlers[args.command](config, args)
 
@@ -57,6 +60,56 @@ def main(argv: list[str] | None = None) -> int:
 # --------------------------------------------------------------------------
 # 指令
 # --------------------------------------------------------------------------
+
+
+def _cmd_analyse(config: Config, args) -> int:
+    """單檔查詢。與每日更新走同一條流程、同一套門檻。"""
+    from .pipeline import analyse_stock
+    from .report.markdown import render_company
+    from .sources.base import SourceUnavailable
+
+    repo_root: Path = args.repo_root
+    stock_id = str(args.stock_id).strip()
+    if not stock_id.isdigit():
+        print(f"股票代號應為數字：{stock_id}", file=sys.stderr)
+        return 2
+
+    try:
+        result, run = analyse_stock(stock_id, config, repo_root)
+    except SourceUnavailable as exc:
+        print(f"\n資料來源不可用，無法分析 {stock_id}：\n\n{exc}\n", file=sys.stderr)
+        return 3
+
+    score = result.score
+    if score.scorable_max == 0:
+        print(
+            f"\n找不到 {stock_id} 的任何財報資料。"
+            "請確認代號正確、且該公司有在公開資訊觀測站申報。\n",
+            file=sys.stderr,
+        )
+        return 4
+
+    path = repo_root / "reports" / "lookup" / f"{stock_id}.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(render_company(result, run), encoding="utf-8")
+
+    company = result.company
+    print(f"\n{company.name}（{company.stock_id}）")
+    print(f"  Buffett Score  {score.total_score:.1f} / {score.scorable_max:.0f} 可評分"
+          f"　等級 {score.grade}")
+    mos = score.valuation.margin_of_safety
+    print(f"  安全邊際       {mos.value:+.1%}" if mos.is_available
+          else f"  安全邊際       資料不足（{mos.unavailable_reason}）")
+    print(f"  投資判斷       {result.verdict}")
+    print(f"    理由：{result.verdict_reason}")
+    print(f"  7 年持有測試   {result.seven_year}")
+    if score.red_flags.triggered:
+        print(f"  紅旗           重大 {score.red_flags.critical_count}、"
+              f"警告 {score.red_flags.warning_count}")
+    for warning in run.warnings[:3]:
+        print(f"  ⚠ {warning}")
+    print(f"\n完整報表：{path.relative_to(repo_root)}\n")
+    return 0
 
 
 def _cmd_update(config: Config, args) -> int:

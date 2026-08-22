@@ -315,6 +315,56 @@ def _leaf_sources(source: str) -> set[str]:
     flattened = source.replace("derived(", "").replace(")", "")
     return {part.strip() for part in flattened.split("+") if part.strip()}
 
+def analyse_stock(
+    stock_id: str,
+    config: Config,
+    repo_root: Path,
+    *,
+    today: date | None = None,
+) -> tuple[CompanyResult, AnalysisRun]:
+    """對任意上市櫃股號跑一次完整的巴菲特分析（需要網路）。
+
+    與 ``run_analysis`` 走同一條流程與同一套設定——差別只在**選誰**：
+    這裡不查持股名單，直接用給定的股號。MOPS 彙總報表本來就是全市場的，
+    所以非成分股拿到的資料品質與成分股相同。
+
+    回傳 ``(結果, 執行)``：報表渲染需要一個 ``AnalysisRun`` 當容器，
+    但這裡的排行榜與評分變化都沒有意義（母體只有一檔），刻意留空。
+    """
+    from .loader import build_lookup_constituent
+    from .sources.constituents import ConstituentSet
+
+    today = today or date.today()
+    loader = DataLoader(config=config, repo_root=repo_root)
+
+    constituent = build_lookup_constituent(stock_id)
+    single = ConstituentSet(
+        constituents=[constituent], source=f"個股查詢：{stock_id}", as_of=today
+    )
+
+    # 市場別非知道不可：財報端點分屬證交所與櫃買中心，選錯就整批抓不到。
+    # 同一個呼叫也會帶回產業別，並把名稱以外的欄位補齊。
+    industries = loader.classify(single)
+
+    loader.prefetch_history(today)
+    if loader.history is not None:
+        constituent.name = loader.history.names.get(stock_id) or constituent.name
+
+    loaded = loader.load_company(constituent)
+    industry = industries.get(stock_id)
+    if industry:
+        loaded.company.industry = industry
+
+    result = analyse_company(loaded, config, today=today, repo_root=repo_root)
+    run = AnalysisRun(
+        run_date=today,
+        constituents=single,
+        results=[result],
+        warnings=list(loader.warnings),
+    )
+    return result, run
+
+
 def run_analysis(
     config: Config,
     repo_root: Path,
@@ -358,5 +408,6 @@ __all__ = [
     "CompanyResult",
     "Leaderboard",
     "analyse_company",
+    "analyse_stock",
     "run_analysis",
 ]

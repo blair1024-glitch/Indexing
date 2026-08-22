@@ -133,6 +133,10 @@ BALANCE_COLUMNS: dict[str, tuple[str, ...]] = {
 }
 
 # 「股本」是**金額**不是股數，換算需要面額。
+NAME_COLUMN = ("公司名稱", "公司簡稱")
+"""彙總報表每一列都帶公司名稱。持股 API 只涵蓋 ETF 成分股，
+其餘 1,900 多家的名稱只能從這裡拿——單檔查詢要靠它。"""
+
 SHARE_CAPITAL = ("股本",)
 """面額由 base.PAR_VALUE 提供。並非所有公司都是 10 元，故換算後必須驗算。"""
 
@@ -266,6 +270,8 @@ class MopsClient:
     config: dict = field(default_factory=dict)
     schema_watch: SchemaWatch = field(default_factory=lambda: SchemaWatch("MOPS 彙總報表"))
     warnings: list[str] = field(default_factory=list)
+    company_names: dict[str, str] = field(default_factory=dict)
+    """``{股號: 公司名稱}``，解析過程順手收集，供任意股號查詢使用。"""
     share_count_bases: dict[str, str] = field(default_factory=dict)
     """股數驗算是靠哪一種權益基準通過的，``{股號: 基準}``。
 
@@ -333,6 +339,14 @@ class MopsClient:
             url=self._url(code),
         )
 
+    def _remember_name(self, header: list[str], row: list[str]) -> None:
+        index = _column_index(header, NAME_COLUMN)
+        if index is None or index >= len(row):
+            return
+        name = row[index].strip()
+        if name:
+            self.company_names.setdefault(row[0], name)
+
     def _point(
         self,
         header: list[str],
@@ -359,6 +373,7 @@ class MopsClient:
         out: dict[str, IncomeStatement] = {}
         for header, row in scan_rows(html):
             statement = IncomeStatement(period=period)
+            self._remember_name(header, row)
             for field_name, candidates in INCOME_COLUMNS.items():
                 scale = 1.0 if field_name == "eps" else THOUSAND
                 setattr(
@@ -385,6 +400,7 @@ class MopsClient:
         out: dict[str, BalanceSheet] = {}
         for header, row in scan_rows(html):
             sheet = BalanceSheet(period=period)
+            self._remember_name(header, row)
             for field_name, candidates in BALANCE_COLUMNS.items():
                 # 每股數值本來就是元，跟著乘一千會變成荒謬的每股淨值，
                 # 而且會讓股數的交叉驗算永遠不通過（同 EPS 的處理）。
@@ -431,6 +447,7 @@ class MopsClient:
         out: dict[str, CashFlowStatement] = {}
         for header, row in scan_rows(html):
             statement = CashFlowStatement(period=period)
+            self._remember_name(header, row)
             statement.operating_cash_flow = self._point(
                 header, row, CASHFLOW_COLUMNS["operating_cash_flow"], provenance,
                 scale=THOUSAND, label="營業活動淨現金流",
@@ -533,6 +550,7 @@ class MopsClient:
                         )
                     history.add(kind, parsed)
 
+        history.names.update(self.company_names)
         self.reconcile_share_counts(history)
 
         if self.share_count_bases:
@@ -579,6 +597,8 @@ class MopsHistory:
     incomes: dict[str, dict[FiscalPeriod, IncomeStatement]] = field(default_factory=dict)
     balances: dict[str, dict[FiscalPeriod, BalanceSheet]] = field(default_factory=dict)
     cash_flows: dict[str, dict[FiscalPeriod, CashFlowStatement]] = field(default_factory=dict)
+    names: dict[str, str] = field(default_factory=dict)
+    """``{股號: 公司名稱}``。任意股號查詢的報表標題來源。"""
 
     def add(self, kind: str, parsed: dict) -> None:
         target = {

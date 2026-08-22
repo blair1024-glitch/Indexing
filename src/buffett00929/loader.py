@@ -478,6 +478,24 @@ def _annualise(attribute: str, statements: list) -> list:
     return []
 
 
+def build_lookup_constituent(stock_id: str, name: str | None = None) -> "Constituent":
+    """把一個股號包成 ``Constituent``，供任意個股查詢使用。
+
+    MOPS 彙總報表本來就是全市場的（本次執行涵蓋 1,975 家），
+    所以分析流程對非成分股完全適用——缺的只是持股 API 才有的那三個欄位。
+
+    權重刻意標成**缺料**而不是 0：這家公司不在 ETF 裡，
+    和「在 ETF 裡但權重為零」是兩件事，報表不該把兩者顯示成同一個樣子。
+    """
+    from .sources.constituents import Constituent
+
+    return Constituent(
+        stock_id=stock_id,
+        name=name or stock_id,
+        weight=DataPoint.missing("非 00929 成分股，無 ETF 權重"),
+    )
+
+
 def drop_conflicting_share_counts(official: list, incoming: list) -> None:
     """MOPS 已驗證過股數的公司，不讓 FinMind 的股數進同一條序列。
 

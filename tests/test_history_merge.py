@@ -431,3 +431,35 @@ class TestShareCountStaysSingleSourced:
         incoming = [self._sheet(2023, 7.3e7, "FinMind:TaiwanStockBalanceSheet")]
         drop_conflicting_share_counts(official, incoming)
         assert incoming[0].shares_outstanding.is_available
+
+
+class TestSingleStockLookup:
+    """任意股號查詢：MOPS 彙總報表本來就涵蓋全市場，不是只有成分股。
+
+    持股 API 只給 00929 的 50 檔（代號、名稱、權重），其餘 1,900 多家
+    要自己組出一個 Constituent。權重必須標成缺料而不是 0——
+    這家公司不在 ETF 裡，不是「權重為零」。
+    """
+
+    def test_a_constituent_is_built_for_any_stock_id(self):
+        from buffett00929.loader import build_lookup_constituent
+
+        c = build_lookup_constituent("2330", name="台積電")
+        assert c.stock_id == "2330"
+        assert c.name == "台積電"
+        assert not c.weight.is_available
+        assert "ETF" in (c.weight.unavailable_reason or "")
+
+    def test_an_unknown_name_falls_back_to_the_code(self):
+        """查得到財報但查不到名稱時仍要能出報表，標題不能是空的。"""
+        from buffett00929.loader import build_lookup_constituent
+
+        c = build_lookup_constituent("9999", name=None)
+        assert c.name == "9999"
+
+    def test_the_weight_reason_survives_into_the_report(self):
+        """報表的 ETF 權重欄要顯示資料不足，不能顯示 0.00%。"""
+        from buffett00929.loader import build_lookup_constituent
+
+        c = build_lookup_constituent("2330", name="台積電")
+        assert c.weight.value is None
