@@ -430,3 +430,54 @@ class TestShareCountCrossCheck:
         dcf = next(m for m in result.methods if m.key == "dcf")
         assert "股數" in dcf.assumptions
         assert "3.06" in dcf.assumptions or "306,000,000" in dcf.assumptions
+
+
+class TestPegOnlySpeaksInsideItsBand:
+    """PEG 的主張是「合理本益比 ≈ 成長率」。區間夾擠一旦接管，它就不再在講這件事。
+
+    實測（2026-08-21，00929 五十檔）：PEG 可用 27 檔，其中 **15 檔被 8 倍下限
+    夾住**、2 檔被 30 倍上限夾住，真正落在區間內的只有 10 檔。而在有 3 種以上
+    方法的公司裡，離中位數最遠的方法**有 67% 是 PEG**——中華電、台灣大、遠傳
+    三檔電信股的分歧度都卡在 62~63%，拿掉 PEG 之後掉到 6~10%。
+
+    對成長 2% 的公司，PEG 給的「合理本益比 8 倍」與這家公司無關，
+    那是區間下限的值。讓它進中位數與分歧度投票，等於讓一個固定倍數
+    冒充成獨立的第三意見。
+    """
+
+    def _company(self, eps_growth: float):
+        return demo.build_company(eps_growth=eps_growth)
+
+    def _config(self):
+        from buffett00929.config import Config
+
+        return (Config.load().scoring.get("margin_of_safety") or {}).get("valuation") or {}
+
+    def test_a_low_grower_gets_no_peg_opinion(self):
+        from buffett00929.scoring.valuation import _method_peg
+
+        method = _method_peg(self._company(0.02), self._config())
+        assert not method.value_per_share.is_available
+        reason = method.value_per_share.unavailable_reason or ""
+        assert "區間" in reason and "2" in reason
+
+    def test_a_grower_inside_the_band_still_gets_one(self):
+        from buffett00929.scoring.valuation import _method_peg
+
+        method = _method_peg(self._company(0.14), self._config())
+        assert method.value_per_share.is_available
+        assert "14" in method.assumptions
+
+    def test_a_hypergrower_above_the_cap_gets_no_opinion(self):
+        """成長 40% 卻用 30 倍，算的是 PEG=0.75 不是 PEG=1——名字會說謊。"""
+        from buffett00929.scoring.valuation import _method_peg
+
+        method = _method_peg(self._company(0.40), self._config())
+        assert not method.value_per_share.is_available
+
+    def test_the_existing_zero_growth_rule_is_unchanged(self):
+        from buffett00929.scoring.valuation import _method_peg
+
+        method = _method_peg(self._company(-0.05), self._config())
+        assert not method.value_per_share.is_available
+        assert "PEG 法不適用" in (method.value_per_share.unavailable_reason or "")

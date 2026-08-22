@@ -416,15 +416,39 @@ def _method_peg(company: Company, config: dict) -> ValuationMethod:
 
     floor = float(config.get("pe_band_floor", 8.0))
     cap = float(config.get("pe_band_cap", 30.0))
-    fair_pe = max(floor, min(cap, growth.value * 100))
+    implied_pe = growth.value * 100
 
+    # 這個方法的主張是「合理本益比 ≈ 成長率」。區間夾擠一旦接管，
+    # 算出來的就不是 PEG＝1 隱含的本益比，而是區間端點本身——
+    # 對成長 2% 的公司，「合理本益比 8 倍」與這家公司無關。
+    #
+    # 讓它照樣投票的代價實測過（2026-08-21，00929 五十檔）：PEG 可用 27 檔，
+    # 其中 15 檔被下限夾住、2 檔被上限夾住，真正落在區間內只有 10 檔；
+    # 而有 3 種以上方法的公司裡，離中位數最遠的**有 67% 是 PEG**。
+    # 中華電、台灣大、遠傳的分歧度都卡在 62~63%，拿掉 PEG 之後掉到 6~10%——
+    # 一個固定倍數冒充獨立的第三意見，把三檔體質最好的公司推出了估值範圍。
+    #
+    # 上下限一視同仁：成長 40% 卻用 30 倍，算的是 PEG＝0.75 不是 PEG＝1，
+    # 那個名字會說謊。寧可讓這個方法沉默，也不要它假裝有意見。
+    if implied_pe < floor or implied_pe > cap:
+        return ValuationMethod(
+            key="peg",
+            label="PEG＝1 隱含合理本益比",
+            value_per_share=DataPoint.missing(
+                f"EPS 成長 {growth.value:.1%} 推得合理本益比 {implied_pe:.1f} 倍，"
+                f"落在 {floor:.0f}~{cap:.0f} 倍區間之外；"
+                "夾擠後的倍數由區間端點決定而非由這家公司決定，PEG 法不表態"
+            ),
+        )
+
+    fair_pe = implied_pe
     return ValuationMethod(
         key="peg",
         label="PEG＝1 隱含合理本益比",
         value_per_share=DataPoint.derived(eps.value * fair_pe, inputs=[eps, growth]),  # type: ignore[operator]
         assumptions=(
             f"EPS 成長 {growth.value:.1%} → 合理本益比 {fair_pe:.1f} 倍"
-            f"（夾於 {floor:.0f}~{cap:.0f} 倍），× 正常化 EPS {eps.value:.2f} 元"
+            f"（落於 {floor:.0f}~{cap:.0f} 倍區間內），× 正常化 EPS {eps.value:.2f} 元"
         ),
     )
 
