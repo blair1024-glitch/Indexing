@@ -111,7 +111,9 @@ class DataLoader:
     # 單一公司
     # ------------------------------------------------------------------
 
-    def load_company(self, constituent: Constituent) -> LoadedCompany:
+    def load_company(
+        self, constituent: Constituent, *, history_only: bool = False
+    ) -> LoadedCompany:
         company = Company(
             stock_id=constituent.stock_id,
             name=constituent.name,
@@ -121,6 +123,17 @@ class DataLoader:
 
         # --- 1. 多年度歷史（MOPS 彙總報表，官方）------------------------------
         from_mops = self._load_from_mops(company)
+
+        # ``history_only`` 給全市場掃描的第一階段用：只吃已經整批回補好的
+        # 彙總報表，**不發出任何逐檔請求**。FinMind 是逐檔且有速率上限，
+        # 1,975 家全部補齊需要近萬次請求；漏一個逐檔呼叫進來，額度就見底了。
+        if history_only:
+            company.note_gap(
+                "此為全市場掃描第一階段，只用彙總報表："
+                "資本支出、股利、歷史本益比與股價未載入"
+                "（FCF、盈再率與安全邊際將標示資料不足，可評分分母因此小於 100）"
+            )
+            return self._normalise(company, from_mops)
 
         # --- 2. FinMind 補 MOPS 沒有的欄位 ------------------------------------
         # 彙總報表沒有資本支出、股利、月營收與本益比序列。
@@ -143,9 +156,14 @@ class DataLoader:
         # 必須在年度彙總之前做，否則官方數字不會進到最終結果。
         self._overlay_official(company)
 
-        # --- 4. 期別正規化（累計 → 單季 → 年度）-------------------------------
-        # 台灣財報一律累計揭露。MOPS 的年度數（season 04）本身就是年度，
-        # 直接以年度期別存放，不會被誤當成單季。
+        return self._normalise(company, from_mops)
+
+    def _normalise(self, company: Company, from_mops: bool) -> LoadedCompany:
+        """期別正規化（累計 → 單季 → 年度）。
+
+        台灣財報一律累計揭露。MOPS 的年度數（season 04）本身就是年度，
+        直接以年度期別存放，不會被誤當成單季。
+        """
         detection = (
             CumulativeDetection(True, "high", "台灣官方財報為累計揭露（MOPS 彙總報表）")
             if from_mops

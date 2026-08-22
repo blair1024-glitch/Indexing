@@ -499,3 +499,93 @@ def _company_qualitative(add, result: CompanyResult) -> None:
 
 
 __all__ = ["render_company", "render_summary", "write_reports"]
+
+
+def render_screen(result: "ScreenResult") -> str:
+    """全市場掃描報表。
+
+    母體與可評分分母必須寫在最上面：「1,975 家中前 50 名補齊估值」
+    與「1,975 家全部評估過」是完全不同的陳述，而讀者只會看標題。
+    """
+    lines: list[str] = []
+    add = lines.append
+    stage_one = len(result.quality_ranked)
+    stage_two = len(result.valued)
+
+    add("# 全市場巴菲特掃描")
+    add("")
+    add(f"> **{result.run_date}**　母體 {stage_one} 家（公開資訊觀測站彙總報表涵蓋範圍）")
+    add(">")
+    add(f"> 第一階段以彙總報表評估**全部 {stage_one} 家**的企業品質——"
+        "彙總報表沒有資本支出、股利與歷史本益比，所以這一階段的可評分分母"
+        "小於 100，**不能與每日更新的總分直接比較**。")
+    add(">")
+    add(f"> 第二階段只對品質最高的 **{stage_two} 家**補齊估值（FinMind 逐檔查詢有速率上限，"
+        "無法對全市場執行）。因此**「沒有 BUY」的意思是這 "
+        f"{stage_two} 家裡沒有，不是全市場沒有**。")
+    add("")
+
+    add("## 🟢 BUY 候選")
+    add("")
+    candidates = result.buy_candidates
+    if candidates:
+        add("| # | 公司 | 代號 | 總分 | 等級 | 安全邊際 | 7 年持有 |")
+        add("| --: | --- | --- | --: | --- | --: | --- |")
+        for i, r in enumerate(candidates, 1):
+            mos = r.score.valuation.margin_of_safety
+            add(f"| {i} | {r.company.name} | {r.company.stock_id} | "
+                f"{r.score.total_score:.1f} | {r.score.grade} | "
+                f"{mos.value:+.1%} | {r.seven_year} |")
+    else:
+        add(f"這 {stage_two} 家補齊估值的公司中，沒有同時滿足"
+            "「總分達標、安全邊際達標、無重大紅旗、財務安全達標」四項條件的標的。")
+    add("")
+
+    add("## 💰 補齊估值後的安全邊際排序")
+    add("")
+    with_mos = result.with_margin_of_safety
+    if with_mos:
+        add("| # | 公司 | 代號 | 總分 | 等級 | 安全邊際 | 判斷 |")
+        add("| --: | --- | --- | --: | --- | --: | --- |")
+        for i, r in enumerate(with_mos[:20], 1):
+            mos = r.score.valuation.margin_of_safety
+            add(f"| {i} | {r.company.name} | {r.company.stock_id} | "
+                f"{r.score.total_score:.1f} | {r.score.grade} | "
+                f"{mos.value:+.1%} | {r.verdict} |")
+        unmeasured = stage_two - len(with_mos)
+        if unmeasured:
+            add("")
+            add(f"另有 **{unmeasured} 家**估值算不出來（方法不足或各方法分歧過大），"
+                "已排除於此表——資料不足不等於便宜，也不等於昂貴。")
+    else:
+        add("補齊估值的公司中沒有任何一家算得出安全邊際。")
+    add("")
+
+    add(f"## 🏅 企業品質 Top 30（第一階段，{stage_one} 家中）")
+    add("")
+    add("_只看生意本身：Management、Moat、ROE 與獲利穩定性。不含估值。_")
+    add("")
+    add("| # | 公司 | 代號 | 企業品質 | 可評分 | 護城河 | 重大紅旗 |")
+    add("| --: | --- | --- | --: | --: | --- | --: |")
+    for i, r in enumerate(result.quality_ranked[:30], 1):
+        add(f"| {i} | {r.company.name} | {r.company.stock_id} | "
+            f"{r.score.business_quality_score:.1f} | {r.score.scorable_max:.0f} | "
+            f"{r.score.moat_grade} | {r.score.red_flags.critical_count} |")
+    add("")
+
+    add("## 已知偏差")
+    add("")
+    add("- **要求殖利率固定 5%**，而市場平均約 3.5%。殖利率法會機械性地對典型公司"
+        "產生約 −30% 安全邊際，使 BUY 候選偏少，且偏向高殖利率股。")
+    add("- **第二階段只涵蓋品質前段班**。價格便宜但品質排不進前段的公司不會被估值，"
+        "因此本表不是「全市場最便宜」的名單。")
+    add("")
+
+    if result.warnings:
+        add("## 執行警告")
+        add("")
+        for warning in result.warnings[:20]:
+            add(f"- {warning}")
+        add("")
+
+    return "\n".join(lines)
