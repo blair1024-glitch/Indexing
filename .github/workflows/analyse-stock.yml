@@ -82,7 +82,7 @@ jobs:
           BRANCH="${{ github.ref_name }}"
           git fetch origin "$BRANCH"
           git reset "origin/$BRANCH"
-          git add reports/lookup
+          git add reports/lookup docs/lookup
 
           if git diff --cached --quiet; then
             echo "報表沒有變化，不建立 commit。"
@@ -99,7 +99,7 @@ jobs:
             sleep $((2 ** attempt))
             git fetch origin "$BRANCH"
             git reset "origin/$BRANCH"
-            git add reports/lookup
+            git add reports/lookup docs/lookup
             git commit -m "chore: 個股查詢 ${{ inputs.stock_id }}"
           done
           exit 1

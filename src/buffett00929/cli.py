@@ -69,6 +69,7 @@ def main(argv: list[str] | None = None) -> int:
 
 def _cmd_screen(config: Config, args) -> int:
     """全市場掃描。第一階段不花 FinMind 額度，第二階段只補前 N 名。"""
+    from .report.dashboard import write_company_dashboards, write_screen_dashboard
     from .report.markdown import render_company, render_screen
     from .screen import screen_market
     from .sources.constituents import ConstituentSet
@@ -119,13 +120,18 @@ def _cmd_screen(config: Config, args) -> int:
         print(f"  {r.company.name}（{r.company.stock_id}）"
               f"品質 {r.score.business_quality_score:.1f}　"
               f"可評分 {r.score.scorable_max:.0f}")
-    print(f"\n完整報表：{path.relative_to(repo_root)}\n")
+    board = write_screen_dashboard(result, repo_root)
+    boards = write_company_dashboards(result.valued, repo_root)
+
+    print(f"\n完整報表：{path.relative_to(repo_root)}")
+    print(f"Dashboard：{board.relative_to(repo_root)}（另有 {len(boards)} 份逐檔頁面）\n")
     return 0
 
 
 def _cmd_analyse(config: Config, args) -> int:
     """單檔查詢。與每日更新走同一條流程、同一套門檻。"""
     from .pipeline import analyse_stock
+    from .report.dashboard import write_company_dashboards
     from .report.markdown import render_company
     from .sources.base import SourceUnavailable
 
@@ -153,6 +159,7 @@ def _cmd_analyse(config: Config, args) -> int:
     path = repo_root / "reports" / "lookup" / f"{stock_id}.md"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(render_company(result, run), encoding="utf-8")
+    board = write_company_dashboards([result], repo_root)[0]
 
     company = result.company
     print(f"\n{company.name}（{company.stock_id}）")
@@ -169,7 +176,8 @@ def _cmd_analyse(config: Config, args) -> int:
               f"警告 {score.red_flags.warning_count}")
     for warning in run.warnings[:3]:
         print(f"  ⚠ {warning}")
-    print(f"\n完整報表：{path.relative_to(repo_root)}\n")
+    print(f"\n完整報表：{path.relative_to(repo_root)}")
+    print(f"Dashboard：{board.relative_to(repo_root)}\n")
     return 0
 
 

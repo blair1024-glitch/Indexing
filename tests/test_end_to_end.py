@@ -236,3 +236,72 @@ class TestSourceAttributionTracksReality:
         html = dashboard.render_dashboard(run)
         for source, _count in run.data_sources:
             assert source in html
+
+
+class TestScanAndLookupDashboards:
+    """掃描與個股也要有 dashboard——評比要看得出來，不是只有 Markdown 表格。
+
+    既有的 dashboard 綁在 ``AnalysisRun`` 上（六張榜單、評分變化、ETF 權重），
+    那些對「一檔股票」或「全市場掃描」都不適用：一檔沒有排行榜，
+    掃描的公司沒有 ETF 權重。共用的是版面與配色，不是內容。
+    """
+
+    def _company_result(self, run):
+        return run.results[0]
+
+    def test_company_dashboard_is_self_contained(self, run):
+        html = dashboard.render_company_dashboard(self._company_result(run))
+        assert 'src="http' not in html and 'href="http' not in html
+        assert "<style>" in html
+
+    def test_company_dashboard_shows_the_component_breakdown(self, run):
+        """使用者要的是「看得出評比」——各項得分必須逐項顯示，不能只有總分。"""
+        html = dashboard.render_company_dashboard(self._company_result(run))
+        for label in ("Management", "Moat", "ROE"):
+            assert label in html
+
+    def test_company_dashboard_names_the_scorable_denominator(self, run):
+        """總分要配著分母看。85 分制與 100 分制的 70 分不是同一件事。"""
+        result = self._company_result(run)
+        html = dashboard.render_company_dashboard(result)
+        assert f"{result.score.scorable_max:.0f}" in html
+
+    def test_company_dashboard_escapes_names(self, run):
+        import copy
+
+        hostile = copy.deepcopy(self._company_result(run))
+        hostile.score.company.name = '<script>alert("x")</script>'
+        html = dashboard.render_company_dashboard(hostile)
+        assert "<script>alert" not in html
+
+    def test_screen_dashboard_renders_without_an_analysis_run(self, run):
+        """掃描沒有 AnalysisRun，dashboard 不能依賴它。"""
+        from buffett00929.screen import ScreenResult
+
+        result = ScreenResult(
+            quality_ranked=run.results, valued=run.results, universe_size=1975
+        )
+        html = dashboard.render_screen_dashboard(result)
+        assert "1,975" in html or "1975" in html
+        assert "<style>" in html
+
+    def test_screen_dashboard_carries_the_degraded_banner(self, run):
+        from buffett00929.models import DataPoint
+        from buffett00929.screen import ScreenResult
+
+        thin = copy_results = [run.results[0]]
+        thin[0].score.valuation.margin_of_safety = DataPoint.missing("僅 0 種估值方法可用")
+        html = dashboard.render_screen_dashboard(
+            ScreenResult(quality_ranked=thin, valued=thin, universe_size=1975)
+        )
+        assert "資料不完整" in html
+
+    def test_writers_create_the_files(self, run, tmp_path):
+        from buffett00929.screen import ScreenResult
+
+        result = ScreenResult(quality_ranked=run.results, valued=run.results[:2],
+                              universe_size=1975)
+        assert dashboard.write_screen_dashboard(result, tmp_path).exists()
+        written = dashboard.write_company_dashboards(result.valued, tmp_path)
+        assert len(written) == 2
+        assert all(p.exists() for p in written)

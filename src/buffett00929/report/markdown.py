@@ -509,7 +509,7 @@ def render_screen(result: "ScreenResult") -> str:
     """
     lines: list[str] = []
     add = lines.append
-    stage_one = len(result.quality_ranked)
+    stage_one = result.universe_size
     stage_two = len(result.valued)
 
     add("# 全市場巴菲特掃描")

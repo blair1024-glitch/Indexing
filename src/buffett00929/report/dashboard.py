@@ -137,6 +137,10 @@ def render_dashboard(run: AnalysisRun) -> str:
         f"<p class='sub'>復華台灣科技優息 ETF ｜ 巴菲特式 3M 選股與財報追蹤 ｜ "
         f"資料日期 {run.run_date.isoformat()}</p>"
     )
+    # 掃描頁不一定存在（要手動觸發過才會產生）。連結照樣給——
+    # 少一個死連結的代價，小於讓使用者不知道有這個東西。
+    add("<p class='sub'><a href='screen.html'>🔍 全市場掃描</a>"
+        "　｜　個股頁面在 <code>lookup/&lt;股號&gt;.html</code></p>")
     if run.is_demo:
         add(
             "<div class='banner'>⚠️ <strong>本頁使用合成範例資料產生</strong>，"
@@ -413,4 +417,245 @@ def _esc(text: object) -> str:
     return html.escape(str(text), quote=True)
 
 
-__all__ = ["render_dashboard", "write_dashboard"]
+__all__ = [
+    "render_company_dashboard",
+    "render_dashboard",
+    "render_screen_dashboard",
+    "write_company_dashboards",
+    "write_dashboard",
+    "write_screen_dashboard",
+]
+
+
+# ---------------------------------------------------------------------------
+# 掃描與個股的 dashboard
+# ---------------------------------------------------------------------------
+#
+# 與每日 dashboard 共用版面與配色（同一份 CSS），但**不共用內容**：
+# 一檔股票沒有排行榜，掃描出來的公司沒有 ETF 權重。硬套 render_dashboard
+# 會逼出一堆空欄位，那比另寫一個版面更難讀。
+
+
+def _page(title: str, body: str, *, home: str = "index.html") -> str:
+    """共用外殼：同一份 CSS、同一組主題變數、同樣自足無外部資源。"""
+    return (
+        "<!doctype html>"
+        '<html lang="zh-Hant"><head><meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width, initial-scale=1">'
+        f"<title>{_esc(title)}</title>"
+        f"<style>{CSS}</style></head><body><div class='wrap'>"
+        f"<p><a href='{_esc(home)}'>← 回 00929 Dashboard</a></p>"
+        + body
+        + "</div></body></html>"
+    )
+
+
+def _component_rows(result: CompanyResult) -> str:
+    """各項評分逐項列出。
+
+    只給總分等於要讀者相信一個數字。分項才看得出這家公司是**哪裡**好——
+    護城河強但獲利穩定性差，和兩者都中等，可以是同一個總分。
+    """
+    rows = []
+    for component in result.score.components.values():
+        scorable = component.scorable_max
+        if scorable <= 0:
+            rows.append(
+                f"<tr><td>{_esc(component.label)}</td>"
+                f"<td class='num'><span class='missing'>整項資料不足</span></td>"
+                f"<td class='num'>—</td><td>—</td></tr>"
+            )
+            continue
+        ratio = component.earned / scorable
+        css = "good" if ratio >= 0.7 else ("warn" if ratio >= 0.4 else "bad")
+        bar = int(round(ratio * 20))
+        rows.append(
+            f"<tr><td>{_esc(component.label)}</td>"
+            f"<td class='num'><strong>{component.earned:.1f}</strong> / {scorable:.0f}</td>"
+            f"<td class='num'><span class='{css}'>{ratio:.0%}</span></td>"
+            f"<td><span class='{css}'>{'█' * bar}{'░' * (20 - bar)}</span></td></tr>"
+        )
+    return (
+        "<div class='card'><h2>評分明細</h2><div class='scroll'><table><thead><tr>"
+        "<th>項目</th><th class='num'>得分</th><th class='num'>得分率</th><th>　</th>"
+        "</tr></thead><tbody>" + "".join(rows) + "</tbody></table></div>"
+        "<p class='note'>分母是<strong>可評分</strong>滿分，不是項目滿分——"
+        "資料不足的指標退出分母，不以 0 分計。</p></div>"
+    )
+
+
+def _valuation_card(result: CompanyResult) -> str:
+    valuation = result.score.valuation
+    rows = []
+    for method in valuation.methods:
+        point = method.value_per_share
+        value = (
+            f"{point.value:,.1f} 元" if point.is_available and point.value is not None
+            else f"<span class='missing'>資料不足</span>"
+        )
+        note = method.assumptions if point.is_available else (point.unavailable_reason or "")
+        rows.append(
+            f"<tr><td>{_esc(method.label)}</td><td class='num'>{value}</td>"
+            f"<td class='note'>{_esc(note)}</td></tr>"
+        )
+    return (
+        "<div class='card'><h2>估值與安全邊際</h2>"
+        f"<p>{_esc(valuation.note or valuation.classification)}</p>"
+        "<div class='scroll'><table><thead><tr><th>方法</th>"
+        "<th class='num'>每股價值</th><th>假設／理由</th></tr></thead><tbody>"
+        + "".join(rows) + "</tbody></table></div></div>"
+    )
+
+
+def render_company_dashboard(result: CompanyResult, *, home: str = "../index.html") -> str:
+    """單一公司的 dashboard：個股查詢與掃描的逐檔頁面共用。"""
+    company = result.company
+    score = result.score
+    body: list[str] = []
+    add = body.append
+
+    add("<header>")
+    add(f"<h1>{_esc(company.name)}<span class='sub'>（{_esc(company.stock_id)}）</span></h1>")
+    add(f"<p class='note'>{_esc(result.conclusion)}</p>")
+    add("</header>")
+
+    add("<div class='tiles'>")
+    add(f"<div class='tile'><span class='label'>Buffett Score</span>"
+        f"<span class='value'>{score.total_score:.1f}</span>"
+        f"<span class='label'>/ {score.scorable_max:.0f} 可評分</span></div>")
+    add(f"<div class='tile'><span class='label'>投資等級</span>"
+        f"<span class='value'>{_esc(score.grade[0])}</span>"
+        f"<span class='label'>{_esc(score.grade[1])}</span></div>")
+    add(f"<div class='tile'><span class='label'>安全邊際</span>"
+        f"<span class='value'>{_mos_cell(score.valuation.margin_of_safety)}</span>"
+        f"<span class='label'>資料覆蓋率 {score.coverage:.0%}</span></div>")
+    add(f"<div class='tile'><span class='label'>投資判斷</span>"
+        f"<span class='value'>{_esc(result.verdict)}</span>"
+        f"<span class='label'>7 年持有 {_esc(result.seven_year)}</span></div>")
+    add("</div>")
+
+    add(f"<div class='card'><h2>判斷理由</h2><p>{_esc(result.verdict_reason)}</p>"
+        f"<p class='note'>{_esc(result.seven_year_reason)}</p></div>")
+
+    add(_component_rows(result))
+    add(_valuation_card(result))
+
+    flags = score.red_flags
+    if flags.triggered:
+        rows = "".join(
+            f"<tr><td>{_esc(f.severity_label)}</td><td>{_esc(f.title)}</td>"
+            f"<td class='note'>{_esc(f.evidence)}</td></tr>"
+            for f in flags.triggered
+        )
+        add("<div class='card'><h2>紅旗警報</h2><div class='scroll'><table><thead><tr>"
+            "<th>嚴重度</th><th>項目</th><th>依據</th></tr></thead><tbody>"
+            + rows + "</tbody></table></div></div>")
+
+    if company.data_gaps:
+        gaps = "".join(f"<li>{_esc(gap)}</li>" for gap in company.data_gaps)
+        add(f"<div class='card'><h2>資料缺口</h2><ul class='note'>{gaps}</ul></div>")
+
+    return _page(f"{company.name}（{company.stock_id}）", "".join(body), home=home)
+
+
+def _screen_table(entries: list[CompanyResult], *, show_mos: bool = True) -> str:
+    if not entries:
+        return "<div class='card'><p class='empty'>沒有符合條件且資料足夠的公司。</p></div>"
+    rows = []
+    for index, result in enumerate(entries, start=1):
+        score = result.score
+        stock_id = result.company.stock_id
+        mos = f"<td class='num'>{_mos_cell(score.valuation.margin_of_safety)}</td>" if show_mos else ""
+        rows.append(
+            f"<tr><td class='num'>{index}</td>"
+            f"<td><a href='lookup/{_esc(stock_id)}.html'>{_esc(result.company.name)}</a></td>"
+            f"<td>{_esc(stock_id)}</td>"
+            f"<td class='num'><strong>{score.total_score:.1f}</strong></td>"
+            f"<td class='num'>{score.scorable_max:.0f}</td>"
+            f"<td><span class='pill'>{_esc(score.grade[0])}</span></td>"
+            f"<td>{_esc(score.moat_grade)}</td>"
+            f"{mos}"
+            f"<td>{_esc(result.verdict)}</td></tr>"
+        )
+    mos_head = "<th class='num'>安全邊際</th>" if show_mos else ""
+    return (
+        "<div class='card'><div class='scroll'><table><thead><tr>"
+        "<th class='num'>#</th><th>公司</th><th>代號</th><th class='num'>總分</th>"
+        "<th class='num'>可評分</th><th>等級</th><th>護城河</th>"
+        f"{mos_head}<th>判斷</th>"
+        "</tr></thead><tbody>" + "".join(rows) + "</tbody></table></div></div>"
+    )
+
+
+def render_screen_dashboard(result) -> str:
+    """全市場掃描的 dashboard。"""
+    body: list[str] = []
+    add = body.append
+    # 母體用 ScreenResult 自己宣告的欄位，不要從清單長度回推——
+    # 兩者在正式執行中相同，但回推會讓「顯示了幾筆」悄悄冒充「評估了幾家」。
+    stage_one = result.universe_size
+    stage_two = len(result.valued)
+
+    add("<header><h1>全市場巴菲特掃描</h1>")
+    add(f"<p class='note'>{result.run_date}　母體 {stage_one:,} 家　"
+        f"第二階段補齊估值 {stage_two} 家</p></header>")
+
+    if result.is_degraded:
+        add("<div class='card bad'><h2>⚠️ 這次執行的估值資料不完整</h2>"
+            f"<p>第二階段 {stage_two} 家中只有 {result.valuation_coverage:.0%} "
+            "算得出安全邊際，通常代表 FinMind 的股利與歷史本益比未取得"
+            "（逐檔查詢有速率上限）。<strong>這不是「市場上沒有便宜的好公司」，"
+            "是這一次沒拿到資料</strong>——換個時間重跑即可，下方名單本次不具代表性。</p></div>")
+
+    add("<div class='tiles'>")
+    add(f"<div class='tile'><span class='label'>母體</span>"
+        f"<span class='value'>{stage_one:,}</span><span class='label'>家上市櫃</span></div>")
+    add(f"<div class='tile'><span class='label'>補齊估值</span>"
+        f"<span class='value'>{stage_two}</span><span class='label'>品質前段班</span></div>")
+    add(f"<div class='tile'><span class='label'>BUY 候選</span>"
+        f"<span class='value'>{len(result.buy_candidates)}</span>"
+        f"<span class='label'>四項條件全過</span></div>")
+    add(f"<div class='tile'><span class='label'>估值覆蓋率</span>"
+        f"<span class='value'>{result.valuation_coverage:.0%}</span>"
+        f"<span class='label'>第二階段內</span></div>")
+    add("</div>")
+
+    add("<h2>🟢 BUY 候選</h2>")
+    if result.buy_candidates:
+        add(_screen_table(result.buy_candidates))
+    else:
+        add(f"<div class='card'><p class='empty'>這 {stage_two} 家補齊估值的公司中，"
+            "沒有同時滿足總分、安全邊際、無重大紅旗與財務安全四項條件的標的。</p></div>")
+
+    add("<h2>💰 安全邊際排序</h2>")
+    add(_screen_table(result.with_margin_of_safety[:20]))
+
+    add(f"<h2>🏅 企業品質 Top 30（{stage_one:,} 家中）</h2>")
+    add("<p class='note'>只看生意本身，不含估值。可評分分母小於 100——"
+        "彙總報表沒有資本支出、股利與歷史本益比，<strong>不可與每日更新的總分直接比較</strong>。</p>")
+    add(_screen_table(result.quality_ranked[:30], show_mos=False))
+
+    if result.warnings:
+        gaps = "".join(f"<li>{_esc(w)}</li>" for w in result.warnings[:10])
+        add(f"<div class='card'><h2>執行警告</h2><ul class='note'>{gaps}</ul></div>")
+
+    return _page("全市場巴菲特掃描", "".join(body), home="index.html")
+
+
+def write_screen_dashboard(result, repo_root: Path) -> Path:
+    docs = repo_root / "docs"
+    docs.mkdir(parents=True, exist_ok=True)
+    path = docs / "screen.html"
+    path.write_text(render_screen_dashboard(result), encoding="utf-8")
+    return path
+
+
+def write_company_dashboards(results: list[CompanyResult], repo_root: Path) -> list[Path]:
+    lookup = repo_root / "docs" / "lookup"
+    lookup.mkdir(parents=True, exist_ok=True)
+    written = []
+    for result in results:
+        path = lookup / f"{result.company.stock_id}.html"
+        path.write_text(render_company_dashboard(result), encoding="utf-8")
+        written.append(path)
+    return written
