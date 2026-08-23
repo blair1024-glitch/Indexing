@@ -49,8 +49,17 @@ class ScreenResult:
     run_date: date = field(default_factory=date.today)
     warnings: list[str] = field(default_factory=list)
 
-    DEGRADED_BELOW = 0.50
-    """估值覆蓋率低於此值即視為該次執行資料不完整，需在報表最上方標示。"""
+    DEGRADED_BELOW = 0.25
+    """估值覆蓋率低於此值即視為該次執行資料不完整，需在報表最上方標示。
+
+    校準自實測，不是猜的：資料完整的兩次執行（`8cad755`、`4ea8155`）
+    覆蓋率都**剛好 50%**——另外 25 家是真的估不出價（方法不足或各方法分歧
+    過大），與來源無關；額度耗盡那次則是 **4%**（50 家裡只有 2 家）。
+
+    門檻要落在這兩者之間，不能貼著健康值。原本設 0.50 等於讓健康執行
+    以毫釐之差通過，任何一家公司少算出一個估值就會誤觸降級橫幅——
+    而誤報降級和漏報降級一樣糟：讀者會開始忽略這個橫幅。
+    """
 
     @property
     def valuation_coverage(self) -> float:

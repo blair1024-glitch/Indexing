@@ -166,7 +166,19 @@ class TestADegradedRunSaysSo:
         assert result.valuation_coverage < 0.10
 
     def test_a_healthy_batch_is_not_flagged(self):
-        assert not self._result(usable=40).is_degraded
+        """實測的健康執行是 25/50——門檻必須明顯低於它，不能貼著它。
+
+        兩次資料完整的執行（8cad755 與 4ea8155）都是覆蓋率剛好 50%：
+        另外 25 家是真的估不出價（方法不足或分歧過大），不是被限流。
+        門檻若設在 0.50，健康執行就是以毫釐之差通過，任何一家公司
+        少算出一個估值都會誤觸降級橫幅。
+        """
+        assert not self._result(usable=25).is_degraded
+        assert not self._result(usable=24).is_degraded
+
+    def test_a_throttled_batch_is_far_below_the_healthy_baseline(self):
+        """被限流那次是 2/50。健康 50%、限流 4%，門檻要落在中間而非邊緣。"""
+        assert self._result(usable=2).is_degraded
 
     def test_the_banner_appears_at_the_top_of_the_report(self):
         from buffett00929.report.markdown import render_screen
