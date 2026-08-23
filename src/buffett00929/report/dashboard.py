@@ -542,9 +542,15 @@ def render_company_dashboard(result: CompanyResult, *, home: str = "../index.htm
 
     flags = score.red_flags
     if flags.triggered:
+        badges = {"critical": ("bad", "🔴 重大"), "warning": ("warn", "🟠 警告")}
         rows = "".join(
-            f"<tr><td>{_esc(f.severity_label)}</td><td>{_esc(f.title)}</td>"
-            f"<td class='note'>{_esc(f.evidence)}</td></tr>"
+            "<tr><td><span class='{css}'>{text}</span></td><td>{label}</td>"
+            "<td class='note'>{evidence}</td></tr>".format(
+                css=badges.get(f.severity, ("", "ℹ️ 提示"))[0],
+                text=badges.get(f.severity, ("", "ℹ️ 提示"))[1],
+                label=_esc(f.label),
+                evidence=_esc(f.evidence),
+            )
             for f in flags.triggered
         )
         add("<div class='card'><h2>紅旗警報</h2><div class='scroll'><table><thead><tr>"

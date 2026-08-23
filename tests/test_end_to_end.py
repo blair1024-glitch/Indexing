@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from datetime import date
 
+import copy
+
 import pytest
 
 from buffett00929 import demo
@@ -273,6 +275,28 @@ class TestScanAndLookupDashboards:
         hostile.score.company.name = '<script>alert("x")</script>'
         html = dashboard.render_company_dashboard(hostile)
         assert "<script>alert" not in html
+
+    def test_company_dashboard_renders_triggered_red_flags(self, run):
+        """紅旗那段分支原本沒有任何測試走過，於是它帶著錯的屬性名上線。
+
+        demo 公司剛好不觸發紅旗，所以整份測試都繞過了 `if flags.triggered:`，
+        而正式執行第一檔有紅旗的公司就炸掉：
+        `AttributeError: 'RedFlag' object has no attribute 'severity_label'`。
+        分析全部跑完（1,975 家、2 檔 BUY 候選），只有最後寫 HTML 那步失敗。
+        """
+        from buffett00929.redflags import RedFlag
+
+        result = copy.deepcopy(run.results[0])
+        result.score.red_flags.triggered = [
+            RedFlag(code="fcf_negative", label="自由現金流轉負",
+                    severity="critical", evidence="最新年度自由現金流為 -1.01 億元"),
+            RedFlag(code="receivables", label="應收帳款成長遠快於營收",
+                    severity="warning", evidence="營收 -7.5% 但應收帳款 +43.6%"),
+        ]
+        html = dashboard.render_company_dashboard(result)
+        assert "自由現金流轉負" in html
+        assert "-1.01 億元" in html
+        assert "應收帳款成長遠快於營收" in html
 
     def test_screen_dashboard_renders_without_an_analysis_run(self, run):
         """掃描沒有 AnalysisRun，dashboard 不能依賴它。"""
