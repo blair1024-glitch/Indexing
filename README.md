@@ -23,6 +23,20 @@
 
 ---
 
+## 快速導覽
+
+| 想看什麼 | 連結 |
+| --- | --- |
+| 00929 五十檔每日總覽 | [reports/README.md](reports/README.md) |
+| 全市場掃描（BUY 候選、安全邊際排序）| [reports/screen.md](reports/screen.md) |
+| 查詢任意個股 | [Actions → 個股查詢](https://github.com/blair1024-glitch/Indexing/actions/workflows/analyse-stock.yml) → Run workflow → 輸入股號 |
+
+> 以上是 GitHub 直接渲染的 Markdown 版本，一定看得到。若這個 repo 已啟用
+> GitHub Pages，也有樣式化的 HTML 版：`docs/index.html`、`docs/screen.html`、
+> `docs/lookup/<股號>.html`（皆為自足檔案，下載後雙擊也能在本機開啟）。
+
+---
+
 ## 快速開始
 
 ```bash
@@ -135,9 +149,9 @@ python -m buffett00929.cli analyse 2330
 
 | 頁面 | 內容 | 產生時機 |
 | --- | --- | --- |
-| `docs/index.html` | 00929 五十檔：六張榜單、紅旗、評分變化 | 每日排程 |
-| `docs/screen.html` | 全市場掃描：BUY 候選、安全邊際排序、品質 Top 30 | 觸發掃描時 |
-| `docs/lookup/<股號>.html` | 單一公司：**評分明細逐項**、四種估值法、紅旗、資料缺口 | 掃描與個股查詢 |
+| [`docs/index.html`](docs/index.html) | 00929 五十檔：六張榜單、紅旗、評分變化 | 每日排程 |
+| [`docs/screen.html`](docs/screen.html) | 全市場掃描：BUY 候選、安全邊際排序、品質 Top 30 | 觸發掃描時 |
+| [`docs/lookup/<股號>.html`](docs/lookup/) | 單一公司：**評分明細逐項**、四種估值法、紅旗、資料缺口 | 掃描與個股查詢 |
 
 三者共用同一份 CSS 與主題變數，都是自足檔案（無外部資源）。
 首頁有連往掃描頁的連結；掃描頁的公司名稱可以點進逐檔頁面。
