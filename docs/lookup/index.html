@@ -1,0 +1,97 @@
+<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>個股頁面</title><style>
+:root {
+  --bg: #f7f8fa;
+  --surface: #ffffff;
+  --border: #e2e6ec;
+  --text: #171a1f;
+  --muted: #5d6673;
+  --accent: #1f5fd6;
+  --good: #12805c;
+  --warn: #a3690a;
+  --bad: #c0392f;
+  --tile: #eef2f8;
+  --shadow: 0 1px 2px rgba(16,24,40,.06), 0 1px 3px rgba(16,24,40,.04);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1216;
+    --surface: #171b21;
+    --border: #2a313b;
+    --text: #e8ebef;
+    --muted: #9aa4b2;
+    --accent: #6da3ff;
+    --good: #3ecf9a;
+    --warn: #e0a63d;
+    --bad: #ff7a6d;
+    --tile: #1e242c;
+    --shadow: none;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1216;
+  --surface: #171b21;
+  --border: #2a313b;
+  --text: #e8ebef;
+  --muted: #9aa4b2;
+  --accent: #6da3ff;
+  --good: #3ecf9a;
+  --warn: #e0a63d;
+  --bad: #ff7a6d;
+  --tile: #1e242c;
+  --shadow: none;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans TC",
+        "PingFang TC", "Microsoft JhengHei", sans-serif;
+  padding: 0 0 4rem;
+}
+.wrap { max-width: 1180px; margin: 0 auto; padding: 0 1.25rem; }
+header { padding: 2.5rem 0 1.5rem; border-bottom: 1px solid var(--border); margin-bottom: 2rem; }
+h1 { font-size: 1.85rem; margin: 0 0 .4rem; letter-spacing: -.02em; }
+h2 { font-size: 1.2rem; margin: 2.5rem 0 .35rem; letter-spacing: -.01em; }
+h2:first-of-type { margin-top: 1.5rem; }
+.sub { color: var(--muted); font-size: .9rem; margin: 0 0 1rem; }
+.nav {
+  display: flex; flex-wrap: wrap; gap: .3rem 1.15rem;
+  padding: .8rem 0; margin: 0;
+  border-bottom: 1px solid var(--border);
+  font-size: .9rem;
+}
+.nav a { color: var(--accent); text-decoration: none; }
+.nav a:hover { text-decoration: underline; }
+.nav .here { color: var(--text); font-weight: 600; }
+.banner {
+  background: color-mix(in srgb, var(--warn) 14%, var(--surface));
+  border: 1px solid var(--warn);
+  border-radius: 8px; padding: .85rem 1rem; margin: 1rem 0; font-size: .92rem;
+}
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: .75rem; margin: 1.25rem 0 0; }
+.tile { background: var(--tile); border: 1px solid var(--border); border-radius: 10px; padding: .85rem .95rem; }
+.tile .label { color: var(--muted); font-size: .78rem; margin-bottom: .3rem; }
+.tile .value { font-size: 1.3rem; font-weight: 600; letter-spacing: -.02em; }
+.tile .note { color: var(--muted); font-size: .74rem; margin-top: .2rem; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow); overflow: hidden; margin-bottom: 1rem; }
+.scroll { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: .88rem; min-width: 640px; }
+th, td { padding: .6rem .75rem; text-align: left; border-bottom: 1px solid var(--border); white-space: nowrap; }
+th { background: var(--tile); font-weight: 600; font-size: .8rem; color: var(--muted); position: sticky; top: 0; }
+tbody tr:last-child td { border-bottom: none; }
+tbody tr:hover td { background: color-mix(in srgb, var(--accent) 6%, transparent); }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+.wrapline { white-space: normal; min-width: 260px; }
+.missing { color: var(--muted); font-style: italic; }
+.good { color: var(--good); font-weight: 600; }
+.warn { color: var(--warn); font-weight: 600; }
+.bad { color: var(--bad); font-weight: 600; }
+.pill { display: inline-block; padding: .1rem .5rem; border-radius: 999px; font-size: .75rem; font-weight: 600; border: 1px solid var(--border); background: var(--tile); }
+.change { padding: .55rem .85rem; border-left: 3px solid var(--accent); background: var(--surface); border-radius: 0 8px 8px 0; margin-bottom: .5rem; border-top: 1px solid var(--border); border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+.change .head { font-weight: 600; }
+.change .why { color: var(--muted); font-size: .85rem; }
+.empty { color: var(--muted); padding: 1rem; }
+footer { margin-top: 3rem; padding-top: 1.25rem; border-top: 1px solid var(--border); color: var(--muted); font-size: .82rem; }
+ul.gaps { margin: .4rem 0 1rem; padding-left: 1.25rem; color: var(--muted); font-size: .86rem; }
+</style></head><body><div class='wrap'><nav class='nav'><a href='../index.html'>🏠 00929 每日</a><a href='../screen.html'>🔍 全市場掃描</a><span class='here'>📇 個股頁面</span><a href='https://github.com/blair1024-glitch/Indexing/actions/workflows/analyse-stock.yml'>⚡ 查詢新個股</a></nav><header><h1>個股頁面</h1><p class='sub'>目前有 50 檔，依股號排序。</p></header><div class='card'><div class='scroll'><table><thead><tr><th>公司</th><th>代號</th></tr></thead><tbody><tr><td><a href='1477.html'>聚陽</a></td><td>1477</td></tr><tr><td><a href='1513.html'>中興電</a></td><td>1513</td></tr><tr><td><a href='1590.html'>亞德客-KY</a></td><td>1590</td></tr><tr><td><a href='1720.html'>生達</a></td><td>1720</td></tr><tr><td><a href='2330.html'>台積電</a></td><td>2330</td></tr><tr><td><a href='2360.html'>致茂</a></td><td>2360</td></tr><tr><td><a href='2368.html'>金像電</a></td><td>2368</td></tr><tr><td><a href='2423.html'>固緯</a></td><td>2423</td></tr><tr><td><a href='2449.html'>京元電子</a></td><td>2449</td></tr><tr><td><a href='2471.html'>資通</a></td><td>2471</td></tr><tr><td><a href='2640.html'>大車隊</a></td><td>2640</td></tr><tr><td><a href='2752.html'>豆府</a></td><td>2752</td></tr><tr><td><a href='2891.html'>中信金</a></td><td>2891</td></tr><tr><td><a href='3030.html'>德律</a></td><td>3030</td></tr><tr><td><a href='3158.html'>嘉實</a></td><td>3158</td></tr><tr><td><a href='3217.html'>優群</a></td><td>3217</td></tr><tr><td><a href='3218.html'>大學光</a></td><td>3218</td></tr><tr><td><a href='3526.html'>凡甲</a></td><td>3526</td></tr><tr><td><a href='3529.html'>力旺</a></td><td>3529</td></tr><tr><td><a href='3533.html'>嘉澤</a></td><td>3533</td></tr><tr><td><a href='3570.html'>大塚</a></td><td>3570</td></tr><tr><td><a href='3653.html'>健策</a></td><td>3653</td></tr><tr><td><a href='4105.html'>東洋</a></td><td>4105</td></tr><tr><td><a href='4107.html'>邦特</a></td><td>4107</td></tr><tr><td><a href='4417.html'>金洲</a></td><td>4417</td></tr><tr><td><a href='4728.html'>雙美</a></td><td>4728</td></tr><tr><td><a href='4771.html'>望隼</a></td><td>4771</td></tr><tr><td><a href='4951.html'>精拓科</a></td><td>4951</td></tr><tr><td><a href='5212.html'>凌網</a></td><td>5212</td></tr><tr><td><a href='5274.html'>信驊</a></td><td>5274</td></tr><tr><td><a href='5519.html'>隆大</a></td><td>5519</td></tr><tr><td><a href='5520.html'>力泰</a></td><td>5520</td></tr><tr><td><a href='6183.html'>關貿</a></td><td>6183</td></tr><tr><td><a href='6197.html'>佳必琪</a></td><td>6197</td></tr><tr><td><a href='6223.html'>旺矽</a></td><td>6223</td></tr><tr><td><a href='6263.html'>普萊德</a></td><td>6263</td></tr><tr><td><a href='6291.html'>沛亨</a></td><td>6291</td></tr><tr><td><a href='6523.html'>達爾膚</a></td><td>6523</td></tr><tr><td><a href='6530.html'>創威</a></td><td>6530</td></tr><tr><td><a href='6534.html'>正瀚-創</a></td><td>6534</td></tr><tr><td><a href='6561.html'>是方</a></td><td>6561</td></tr><tr><td><a href='6741.html'>91APP*-KY</a></td><td>6741</td></tr><tr><td><a href='6782.html'>視陽</a></td><td>6782</td></tr><tr><td><a href='6788.html'>華景電</a></td><td>6788</td></tr><tr><td><a href='6855.html'>數泓科</a></td><td>6855</td></tr><tr><td><a href='8069.html'>元太</a></td><td>8069</td></tr><tr><td><a href='8416.html'>實威</a></td><td>8416</td></tr><tr><td><a href='8464.html'>億豐</a></td><td>8464</td></tr><tr><td><a href='8996.html'>高力</a></td><td>8996</td></tr><tr><td><a href='9911.html'>櫻花</a></td><td>9911</td></tr></tbody></table></div></div><p class='note'>清單只涵蓋<strong>已經產生過</strong>的頁面。要查沒在上面的股票，用上方「查詢新個股」跑一次 Action。</p></div></body></html>

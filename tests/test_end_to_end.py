@@ -103,10 +103,17 @@ class TestMarkdownReport:
 
 class TestHtmlDashboard:
     def test_is_self_contained(self, run):
-        """CSP 與離線可用性：不得有任何外部資源請求。"""
+        """CSP 與離線可用性：不得有任何外部**資源請求**。
+
+        擋的是會發出請求的東西（``src=``、``<link href=``），不是 ``<a href>``。
+        導覽列上的「查詢新個股」連到 GitHub Actions——那是**導覽**，
+        不載入任何資源、不影響離線開啟、不違反 CSP。
+        原本寫成 `'href="http' not in html`，會連導覽連結一起擋掉，
+        而且只擋雙引號（本檔案的 HTML 屬性用單引號），等於兩頭都不準。
+        """
         html = dashboard.render_dashboard(run)
-        assert 'src="http' not in html
-        assert 'href="http' not in html
+        assert "src='http" not in html and 'src="http' not in html
+        assert "<link" not in html
         assert "<style>" in html
 
     def test_declares_both_themes(self, run):
@@ -252,8 +259,10 @@ class TestScanAndLookupDashboards:
         return run.results[0]
 
     def test_company_dashboard_is_self_contained(self, run):
+        """同 ``test_is_self_contained``：擋資源請求，不擋導覽連結。"""
         html = dashboard.render_company_dashboard(self._company_result(run))
-        assert 'src="http' not in html and 'href="http' not in html
+        assert "src='http" not in html and 'src="http' not in html
+        assert "<link" not in html
         assert "<style>" in html
 
     def test_company_dashboard_shows_the_component_breakdown(self, run):
@@ -329,3 +338,166 @@ class TestScanAndLookupDashboards:
         written = dashboard.write_company_dashboards(result.valued, tmp_path)
         assert len(written) == 2
         assert all(p.exists() for p in written)
+
+
+class TestNavigation:
+    """三種頁面要能互相到達。
+
+    這是使用者實際踩到的問題：Pages 站台打開之後，沒有任何界面可以進到
+    全市場掃描或個股頁面——得自己手打 ``screen.html``、``lookup/6523.html``。
+    """
+
+    def _company_result(self, run):
+        return run.results[0]
+
+    def _screen_result(self, run):
+        from buffett00929.screen import ScreenResult
+
+        return ScreenResult(
+            quality_ranked=run.results, valued=run.results[:2], universe_size=1975
+        )
+
+    def test_every_page_carries_the_nav(self, run):
+        pages = (
+            dashboard.render_dashboard(run),
+            dashboard.render_screen_dashboard(self._screen_result(run)),
+            dashboard.render_company_dashboard(self._company_result(run)),
+        )
+        for html in pages:
+            assert "<nav class='nav'>" in html
+            for label in ("00929 每日", "全市場掃描", "個股頁面", "查詢新個股"):
+                assert label in html
+
+    def test_company_page_nav_climbs_out_of_lookup(self, run):
+        """個股頁在 ``docs/lookup/`` 底下，比首頁深一層。
+
+        少了 ``../`` 就會連到 ``lookup/index.html``（自己）與
+        ``lookup/screen.html``（不存在）。
+        """
+        html = dashboard.render_company_dashboard(self._company_result(run))
+        assert "href='../index.html'" in html
+        assert "href='../screen.html'" in html
+
+    def test_company_page_links_back_to_the_lookup_list(self, run):
+        """個股頁**在** lookup 區裡，但它不是那個列表頁。
+
+        標成 current 會讓「個股頁面」變成不能點的字，從個股頁就回不去清單。
+        """
+        html = dashboard.render_company_dashboard(self._company_result(run))
+        nav = html.split("</nav>")[0]
+        assert "href='../lookup/index.html'" in nav
+        assert "class='here'" not in nav
+
+    def test_root_level_pages_do_not_use_a_prefix(self, run):
+        html = dashboard.render_dashboard(run)
+        assert "href='screen.html'" in html
+        assert "../" not in html.split("</nav>")[0]
+
+    def test_current_page_is_not_a_link(self, run):
+        """連到自己是雜訊。"""
+        html = dashboard.render_dashboard(run)
+        nav = html.split("</nav>")[0]
+        assert "<span class='here'>🏠 00929 每日</span>" in nav
+        assert "href='index.html'" not in nav
+
+    def test_lookup_query_points_at_the_workflow(self, run):
+        """個股查詢是 workflow_dispatch，靜態頁只能把人帶到 Actions。"""
+        html = dashboard.render_dashboard(run)
+        assert dashboard.LOOKUP_WORKFLOW_URL in html
+        assert dashboard.LOOKUP_WORKFLOW_URL.endswith("/analyse-stock.yml")
+
+
+class TestLookupIndex:
+    def _screen_result(self, run):
+        from buffett00929.screen import ScreenResult
+
+        return ScreenResult(
+            quality_ranked=run.results, valued=run.results[:3], universe_size=1975
+        )
+
+    def test_index_lists_the_companies_written(self, run, tmp_path):
+        results = self._screen_result(run).valued
+        dashboard.write_company_dashboards(results, tmp_path)
+
+        index = (tmp_path / "docs" / "lookup" / "index.html").read_text(encoding="utf-8")
+        for result in results:
+            assert result.company.stock_id in index
+            assert result.company.name in index
+            assert f"href='{result.company.stock_id}.html'" in index
+
+    def test_a_single_lookup_does_not_wipe_the_scan(self, run, tmp_path):
+        """兩個呼叫點寫的份數不同，清單必須合併而不是整份重建。
+
+        掃描一次寫 50 檔、個股查詢一次只寫 1 檔。若從 ``results`` 整份重建，
+        查一檔就會把掃描寫的另外 49 筆洗掉。
+        """
+        import json
+
+        scanned = run.results[:3]
+        dashboard.write_company_dashboards(scanned, tmp_path)
+
+        # 個股查詢：只寫一檔，而且是不在掃描名單裡的那一檔。
+        single = [r for r in run.results if r not in scanned][:1]
+        assert single, "測試資料需要至少 4 檔才問得出這件事"
+        dashboard.write_company_dashboards(single, tmp_path)
+
+        manifest = json.loads(
+            (tmp_path / "docs" / "lookup" / "index.json").read_text(encoding="utf-8")
+        )
+        assert len(manifest) == len(scanned) + 1
+        for result in scanned + single:
+            assert manifest[result.company.stock_id] == result.company.name
+
+    def test_pages_written_before_the_manifest_existed_are_picked_up(self, run, tmp_path):
+        """清單檔是後來才加的，之前產生的 50 份頁面不在裡面。
+
+        沒有這一層，導覽列上的「個股頁面」會連到一份只有新頁面的清單，
+        舊的 50 份等於消失——而要補回來就得重跑一次掃描（花 FinMind 額度）。
+        """
+        lookup = tmp_path / "docs" / "lookup"
+        lookup.mkdir(parents=True)
+        # 模擬舊版產生的頁面：只有 HTML，沒有清單檔。
+        legacy = run.results[0]
+        (lookup / f"{legacy.company.stock_id}.html").write_text(
+            dashboard.render_company_dashboard(legacy), encoding="utf-8"
+        )
+
+        other = [r for r in run.results if r is not legacy][:1]
+        dashboard.write_company_dashboards(other, tmp_path)
+
+        index = (lookup / "index.html").read_text(encoding="utf-8")
+        assert legacy.company.stock_id in index
+        assert legacy.company.name in index, "舊頁面的公司名要從標題救回來"
+        assert other[0].company.stock_id in index
+
+    def test_scan_falls_back_to_the_stock_id_when_the_title_is_unreadable(self, tmp_path):
+        """救援層寧可少一個名字，也不要讓那一頁從清單上消失。"""
+        lookup = tmp_path / "docs" / "lookup"
+        lookup.mkdir(parents=True)
+        (lookup / "9999.html").write_text("<html>沒有標題</html>", encoding="utf-8")
+
+        dashboard.write_company_dashboards([], tmp_path)
+
+        index = (lookup / "index.html").read_text(encoding="utf-8")
+        assert "9999" in index
+
+    def test_a_broken_manifest_does_not_fail_the_run(self, run, tmp_path):
+        """清單是導覽用的便利品，不是資料——壞掉不該中斷整次執行。"""
+        lookup = tmp_path / "docs" / "lookup"
+        lookup.mkdir(parents=True)
+        (lookup / "index.json").write_text("{ not json", encoding="utf-8")
+
+        results = run.results[:2]
+        dashboard.write_company_dashboards(results, tmp_path)
+
+        index = (lookup / "index.html").read_text(encoding="utf-8")
+        for result in results:
+            assert result.company.stock_id in index
+
+    def test_index_is_reachable_from_the_nav(self, run, tmp_path):
+        dashboard.write_company_dashboards(run.results[:1], tmp_path)
+        index = (tmp_path / "docs" / "lookup" / "index.html").read_text(encoding="utf-8")
+        # 自己這一頁不給連結，其他三項要連得出去。
+        assert "<span class='here'>📇 個股頁面</span>" in index
+        assert "href='../index.html'" in index
+        assert "href='../screen.html'" in index
