@@ -10,6 +10,8 @@
 from __future__ import annotations
 
 import html
+import json
+import re
 from pathlib import Path
 
 from ..pipeline import AnalysisRun, CompanyResult
@@ -72,6 +74,15 @@ h1 { font-size: 1.85rem; margin: 0 0 .4rem; letter-spacing: -.02em; }
 h2 { font-size: 1.2rem; margin: 2.5rem 0 .35rem; letter-spacing: -.01em; }
 h2:first-of-type { margin-top: 1.5rem; }
 .sub { color: var(--muted); font-size: .9rem; margin: 0 0 1rem; }
+.nav {
+  display: flex; flex-wrap: wrap; gap: .3rem 1.15rem;
+  padding: .8rem 0; margin: 0;
+  border-bottom: 1px solid var(--border);
+  font-size: .9rem;
+}
+.nav a { color: var(--accent); text-decoration: none; }
+.nav a:hover { text-decoration: underline; }
+.nav .here { color: var(--text); font-weight: 600; }
 .banner {
   background: color-mix(in srgb, var(--warn) 14%, var(--surface));
   border: 1px solid var(--warn);
@@ -104,6 +115,43 @@ footer { margin-top: 3rem; padding-top: 1.25rem; border-top: 1px solid var(--bor
 ul.gaps { margin: .4rem 0 1rem; padding-left: 1.25rem; color: var(--muted); font-size: .86rem; }
 """
 
+# 個股查詢是 workflow_dispatch，靜態頁沒辦法自己觸發，只能把人帶到
+# Actions 頁面按 Run workflow。
+# 不從 config 讀：render_* 這幾個函式目前都不吃 config，
+# 為了一個字串把 config 一路傳進來不划算。
+REPO_URL = "https://github.com/blair1024-glitch/Indexing"
+LOOKUP_WORKFLOW_URL = f"{REPO_URL}/actions/workflows/analyse-stock.yml"
+
+LOOKUP_INDEX_NAME = "index.json"
+"""個股頁清單。見 ``write_company_dashboards`` 為什麼需要它。"""
+
+
+def _nav(*, prefix: str = "", current: str = "") -> str:
+    """三種頁面（首頁／掃描／個股）共用的導覽列。
+
+    ``prefix`` 處理目錄深度：根目錄的 index、screen 用 ``""``，
+    ``lookup/`` 底下的個股頁用 ``"../"``。
+
+    ``current`` 標示目前這一頁，該項不給連結——連到自己是雜訊。
+
+    掃描頁與個股列表**不一定存在**（要手動觸發過才會產生）。連結照樣給：
+    少一個死連結的代價，小於讓使用者不知道有這個東西。
+    """
+    items = (
+        ("index", "🏠 00929 每日", f"{prefix}index.html"),
+        ("screen", "🔍 全市場掃描", f"{prefix}screen.html"),
+        ("lookup", "📇 個股頁面", f"{prefix}lookup/index.html"),
+        # 外部連結：靜態頁不能觸發 Action，只能把人帶過去。
+        ("query", "⚡ 查詢新個股", LOOKUP_WORKFLOW_URL),
+    )
+    cells = [
+        f"<span class='here'>{_esc(label)}</span>"
+        if key == current
+        else f"<a href='{_esc(href)}'>{_esc(label)}</a>"
+        for key, label, href in items
+    ]
+    return f"<nav class='nav'>{''.join(cells)}</nav>"
+
 
 def write_dashboard(run: AnalysisRun, repo_root: Path) -> Path:
     docs = repo_root / "docs"
@@ -131,16 +179,13 @@ def render_dashboard(run: AnalysisRun) -> str:
     ]
     add = parts.append
 
+    add(_nav(current="index"))
     add("<header>")
     add("<h1>00929 Buffett Dashboard</h1>")
     add(
         f"<p class='sub'>復華台灣科技優息 ETF ｜ 巴菲特式 3M 選股與財報追蹤 ｜ "
         f"資料日期 {run.run_date.isoformat()}</p>"
     )
-    # 掃描頁不一定存在（要手動觸發過才會產生）。連結照樣給——
-    # 少一個死連結的代價，小於讓使用者不知道有這個東西。
-    add("<p class='sub'><a href='screen.html'>🔍 全市場掃描</a>"
-        "　｜　個股頁面在 <code>lookup/&lt;股號&gt;.html</code></p>")
     if run.is_demo:
         add(
             "<div class='banner'>⚠️ <strong>本頁使用合成範例資料產生</strong>，"
@@ -436,7 +481,7 @@ __all__ = [
 # 會逼出一堆空欄位，那比另寫一個版面更難讀。
 
 
-def _page(title: str, body: str, *, home: str = "index.html") -> str:
+def _page(title: str, body: str, *, prefix: str = "", current: str = "") -> str:
     """共用外殼：同一份 CSS、同一組主題變數、同樣自足無外部資源。"""
     return (
         "<!doctype html>"
@@ -444,7 +489,7 @@ def _page(title: str, body: str, *, home: str = "index.html") -> str:
         '<meta name="viewport" content="width=device-width, initial-scale=1">'
         f"<title>{_esc(title)}</title>"
         f"<style>{CSS}</style></head><body><div class='wrap'>"
-        f"<p><a href='{_esc(home)}'>← 回 00929 Dashboard</a></p>"
+        + _nav(prefix=prefix, current=current)
         + body
         + "</div></body></html>"
     )
@@ -507,8 +552,11 @@ def _valuation_card(result: CompanyResult) -> str:
     )
 
 
-def render_company_dashboard(result: CompanyResult, *, home: str = "../index.html") -> str:
-    """單一公司的 dashboard：個股查詢與掃描的逐檔頁面共用。"""
+def render_company_dashboard(result: CompanyResult, *, prefix: str = "../") -> str:
+    """單一公司的 dashboard：個股查詢與掃描的逐檔頁面共用。
+
+    預設 ``prefix="../"``：這些頁面寫在 ``docs/lookup/`` 底下，比首頁深一層。
+    """
     company = result.company
     score = result.score
     body: list[str] = []
@@ -561,7 +609,9 @@ def render_company_dashboard(result: CompanyResult, *, home: str = "../index.htm
         gaps = "".join(f"<li>{_esc(gap)}</li>" for gap in company.data_gaps)
         add(f"<div class='card'><h2>資料缺口</h2><ul class='note'>{gaps}</ul></div>")
 
-    return _page(f"{company.name}（{company.stock_id}）", "".join(body), home=home)
+    # 不標 current="lookup"：個股頁**在** lookup 區裡，但它不是那個列表頁。
+    # 標成 current 會讓「個股頁面」變成不能點的字，從這裡就回不去清單了。
+    return _page(f"{company.name}（{company.stock_id}）", "".join(body), prefix=prefix)
 
 
 def _screen_table(entries: list[CompanyResult], *, show_mos: bool = True) -> str:
@@ -645,7 +695,7 @@ def render_screen_dashboard(result) -> str:
         gaps = "".join(f"<li>{_esc(w)}</li>" for w in result.warnings[:10])
         add(f"<div class='card'><h2>執行警告</h2><ul class='note'>{gaps}</ul></div>")
 
-    return _page("全市場巴菲特掃描", "".join(body), home="index.html")
+    return _page("全市場巴菲特掃描", "".join(body), current="screen")
 
 
 def write_screen_dashboard(result, repo_root: Path) -> Path:
@@ -656,7 +706,72 @@ def write_screen_dashboard(result, repo_root: Path) -> Path:
     return path
 
 
+def _render_lookup_index(names: dict[str, str]) -> str:
+    """個股頁清單：把已經產生的逐檔頁面列出來。
+
+    沒有這一頁，50 份報表等於藏著——讀者要先知道股號才進得去。
+    """
+    if not names:
+        body = (
+            "<header><h1>個股頁面</h1></header>"
+            "<p class='empty'>還沒有任何個股頁面。"
+            "跑一次全市場掃描，或用上方「查詢新個股」查一檔。</p>"
+        )
+        return _page("個股頁面", body, prefix="../", current="lookup")
+
+    rows = "".join(
+        f"<tr><td><a href='{_esc(stock_id)}.html'>{_esc(names[stock_id])}</a></td>"
+        f"<td>{_esc(stock_id)}</td></tr>"
+        for stock_id in sorted(names)
+    )
+    body = (
+        "<header><h1>個股頁面</h1>"
+        f"<p class='sub'>目前有 {len(names)} 檔，依股號排序。</p></header>"
+        "<div class='card'><div class='scroll'><table><thead><tr>"
+        "<th>公司</th><th>代號</th></tr></thead><tbody>"
+        f"{rows}</tbody></table></div></div>"
+        "<p class='note'>清單只涵蓋<strong>已經產生過</strong>的頁面。"
+        "要查沒在上面的股票，用上方「查詢新個股」跑一次 Action。</p>"
+    )
+    return _page("個股頁面", body, prefix="../", current="lookup")
+
+
+def _scan_existing_pages(lookup: Path) -> dict[str, str]:
+    """磁碟上已經有的個股頁面。
+
+    清單檔是後來才加的，在那之前產生的頁面不在裡面；清單檔也可能遺失或損毀。
+    這一層讓清單自己補回來，不必為了補目錄而重跑一次掃描（那要花 FinMind 額度）。
+
+    公司名從頁面標題取（``公司名（股號）``）。標題對不上就退回只顯示股號——
+    這一層是**救援**用的，寧可少一個名字，也不要讓那一頁從清單上消失。
+    """
+    if not lookup.is_dir():
+        return {}
+
+    found: dict[str, str] = {}
+    for path in lookup.glob("*.html"):
+        stock_id = path.stem
+        if stock_id == "index":
+            continue
+        name = stock_id
+        try:
+            head = path.read_text(encoding="utf-8")[:2000]
+        except OSError:
+            head = ""
+        match = re.search(r"<title>(.*?)（", head)
+        if match and match.group(1).strip():
+            name = html.unescape(match.group(1).strip())
+        found[stock_id] = name
+    return found
+
+
 def write_company_dashboards(results: list[CompanyResult], repo_root: Path) -> list[Path]:
+    """寫逐檔頁面，並更新個股清單頁。
+
+    清單用**合併**而不是整份重建：這個函式有兩個呼叫點，掃描一次寫 50 檔、
+    個股查詢一次只寫 1 檔。若從 ``results`` 整份重建，查一檔就會把掃描寫的
+    另外 49 筆洗掉。
+    """
     lookup = repo_root / "docs" / "lookup"
     lookup.mkdir(parents=True, exist_ok=True)
     written = []
@@ -664,4 +779,27 @@ def write_company_dashboards(results: list[CompanyResult], repo_root: Path) -> l
         path = lookup / f"{result.company.stock_id}.html"
         path.write_text(render_company_dashboard(result), encoding="utf-8")
         written.append(path)
+
+    # 三層合併，由弱到強：磁碟上既有的頁面 → 清單檔 → 這次算出來的結果。
+    names: dict[str, str] = _scan_existing_pages(lookup)
+
+    manifest = lookup / LOOKUP_INDEX_NAME
+    if manifest.exists():
+        try:
+            loaded = json.loads(manifest.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            # 清單壞掉不該讓整次執行失敗——它是導覽用的便利品，
+            # 不是資料。掃磁碟那層已經把能救的救回來了。
+            loaded = {}
+        if isinstance(loaded, dict):
+            names.update({str(k): str(v) for k, v in loaded.items()})
+
+    for result in results:
+        names[result.company.stock_id] = result.company.name
+
+    manifest.write_text(
+        json.dumps(names, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    (lookup / "index.html").write_text(_render_lookup_index(names), encoding="utf-8")
     return written
