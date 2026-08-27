@@ -1,0 +1,106 @@
+<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>恆大（1325）</title><style>
+:root {
+  --bg: #f7f8fa;
+  --surface: #ffffff;
+  --border: #e2e6ec;
+  --text: #171a1f;
+  --muted: #5d6673;
+  --accent: #1f5fd6;
+  --good: #12805c;
+  --warn: #a3690a;
+  --bad: #c0392f;
+  --tile: #eef2f8;
+  --shadow: 0 1px 2px rgba(16,24,40,.06), 0 1px 3px rgba(16,24,40,.04);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1216;
+    --surface: #171b21;
+    --border: #2a313b;
+    --text: #e8ebef;
+    --muted: #9aa4b2;
+    --accent: #6da3ff;
+    --good: #3ecf9a;
+    --warn: #e0a63d;
+    --bad: #ff7a6d;
+    --tile: #1e242c;
+    --shadow: none;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1216;
+  --surface: #171b21;
+  --border: #2a313b;
+  --text: #e8ebef;
+  --muted: #9aa4b2;
+  --accent: #6da3ff;
+  --good: #3ecf9a;
+  --warn: #e0a63d;
+  --bad: #ff7a6d;
+  --tile: #1e242c;
+  --shadow: none;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans TC",
+        "PingFang TC", "Microsoft JhengHei", sans-serif;
+  padding: 0 0 4rem;
+}
+.wrap { max-width: 1180px; margin: 0 auto; padding: 0 1.25rem; }
+header { padding: 2.5rem 0 1.5rem; border-bottom: 1px solid var(--border); margin-bottom: 2rem; }
+h1 { font-size: 1.85rem; margin: 0 0 .4rem; letter-spacing: -.02em; }
+h2 { font-size: 1.2rem; margin: 2.5rem 0 .35rem; letter-spacing: -.01em; }
+h2:first-of-type { margin-top: 1.5rem; }
+.sub { color: var(--muted); font-size: .9rem; margin: 0 0 1rem; }
+.nav {
+  display: flex; flex-wrap: wrap; gap: .3rem 1.15rem;
+  padding: .8rem 0; margin: 0;
+  border-bottom: 1px solid var(--border);
+  font-size: .9rem;
+}
+.nav a { color: var(--accent); text-decoration: none; }
+.nav a:hover { text-decoration: underline; }
+.nav .here { color: var(--text); font-weight: 600; }
+.banner {
+  background: color-mix(in srgb, var(--warn) 14%, var(--surface));
+  border: 1px solid var(--warn);
+  border-radius: 8px; padding: .85rem 1rem; margin: 1rem 0; font-size: .92rem;
+}
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: .75rem; margin: 1.25rem 0 0; }
+.tile { background: var(--tile); border: 1px solid var(--border); border-radius: 10px; padding: .85rem .95rem; }
+.tile .label { color: var(--muted); font-size: .78rem; margin-bottom: .3rem; }
+.tile .value { font-size: 1.3rem; font-weight: 600; letter-spacing: -.02em; }
+.tile .note { color: var(--muted); font-size: .74rem; margin-top: .2rem; }
+/* 基本面那排放的是「半導體業」「1,234.5 億」這種字串，不是兩三位數字，
+   用 .value 的 1.3rem 會擠成兩行。 */
+.tile .value.small { font-size: 1rem; }
+.search {
+  width: 100%; padding: .7rem .85rem; margin: 0 0 .5rem;
+  border: 1px solid var(--border); border-radius: 8px;
+  background: var(--bg); color: var(--text); font: inherit;
+}
+.search:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow); overflow: hidden; margin-bottom: 1rem; }
+.scroll { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: .88rem; min-width: 640px; }
+th, td { padding: .6rem .75rem; text-align: left; border-bottom: 1px solid var(--border); white-space: nowrap; }
+th { background: var(--tile); font-weight: 600; font-size: .8rem; color: var(--muted); position: sticky; top: 0; }
+tbody tr:last-child td { border-bottom: none; }
+tbody tr:hover td { background: color-mix(in srgb, var(--accent) 6%, transparent); }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+.wrapline { white-space: normal; min-width: 260px; }
+.missing { color: var(--muted); font-style: italic; }
+.good { color: var(--good); font-weight: 600; }
+.warn { color: var(--warn); font-weight: 600; }
+.bad { color: var(--bad); font-weight: 600; }
+.pill { display: inline-block; padding: .1rem .5rem; border-radius: 999px; font-size: .75rem; font-weight: 600; border: 1px solid var(--border); background: var(--tile); }
+.change { padding: .55rem .85rem; border-left: 3px solid var(--accent); background: var(--surface); border-radius: 0 8px 8px 0; margin-bottom: .5rem; border-top: 1px solid var(--border); border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+.change .head { font-weight: 600; }
+.change .why { color: var(--muted); font-size: .85rem; }
+.empty { color: var(--muted); padding: 1rem; }
+footer { margin-top: 3rem; padding-top: 1.25rem; border-top: 1px solid var(--border); color: var(--muted); font-size: .82rem; }
+ul.gaps { margin: .4rem 0 1rem; padding-left: 1.25rem; color: var(--muted); font-size: .86rem; }
+</style></head><body><div class='wrap'><nav class='nav'><a href='../index.html'>🏠 00929 每日</a><a href='../screen.html'>🔍 全市場掃描</a><a href='../lookup/index.html'>🔎 查詢個股</a></nav><header><h1>恆大<span class='sub'>（1325）</span></h1><p class='note'>這是一家「大起大落」的公司，最大的護城河是毛利率水準（5 年平均）（低毛利，易陷價格競爭（&lt;15%）），最大的風險是毛利率連續下降——毛利率 連續 3 年下降：0.07884 → -0.0009242 → -0.1156 → -0.1783，目前股價相對內在價值為資料不足，因此我會 🔴 AVOID / 避免。</p></header><div class='banner'>ℹ️ <strong>這一檔只做了第一階段（企業品質）</strong>：估值需要股利與資本支出，那些只能逐檔向 FinMind 查詢，因此只對品質前段班補齊。下方的安全邊際顯示「資料不足」，意思是<strong>還沒算</strong>，<strong>不是估不出來</strong>——兩者長得一樣，結論卻相反。</div><div class='card'><h2>基本面</h2><div class='tiles'><div class='tile'><span class='label'>產業別</span><span class='value small'>塑膠工業</span></div><div class='tile'><span class='label'>市場別</span><span class='value small'>上市</span></div><div class='tile'><span class='label'>最新年度營收</span><span class='value small'>2.9 億</span></div><div class='tile'><span class='label'>市值</span><span class='value small'>22.2 億</span></div><div class='tile'><span class='label'>股價</span><span class='value small'>26.00 元</span></div><div class='tile'><span class='label'>本益比</span><span class='value small'><span class='missing'>資料不足</span></span></div><div class='tile'><span class='label'>股價淨值比</span><span class='value small'>0.86x</span></div><div class='tile'><span class='label'>現金殖利率</span><span class='value small'><span class='missing'>資料不足</span></span></div></div></div><div class='tiles'><div class='tile'><span class='label'>Buffett Score</span><span class='value'>2.0</span><span class='label'>/ 85 可評分</span></div><div class='tile'><span class='label'>投資等級</span><span class='value'>D</span><span class='label'>不符合長期價值投資條件</span></div><div class='tile'><span class='label'>安全邊際</span><span class='value'><span class='missing'>資料不足</span></span><span class='label'>資料覆蓋率 85%</span></div><div class='tile'><span class='label'>投資判斷</span><span class='value'>🔴 AVOID / 避免</span><span class='label'>7 年持有 🔴 NO</span></div></div><div class='card'><h2>判斷理由</h2><p>總分 2、2 項重大紅旗，不符合長期持有條件</p><p class='note'>企業品質 21 分、護城河得分率 5%、2 項重大紅旗，不具備不看股價持有 7 年的條件</p></div><div class='card'><h2>評分明細</h2><div class='scroll'><table><thead><tr><th>項目</th><th class='num'>得分</th><th class='num'>得分率</th><th>　</th></tr></thead><tbody><tr><td>Management 管理能力</td><td class='num'><strong>8.5</strong> / 15</td><td class='num'><span class='warn'>57%</span></td><td><span class='warn'>███████████░░░░░░░░░</span></td></tr><tr><td>Moat 經濟護城河</td><td class='num'><strong>1.0</strong> / 22</td><td class='num'><span class='bad'>5%</span></td><td><span class='bad'>█░░░░░░░░░░░░░░░░░░░</span></td></tr><tr><td>ROE 與資本效率</td><td class='num'><strong>3.5</strong> / 15</td><td class='num'><span class='bad'>23%</span></td><td><span class='bad'>█████░░░░░░░░░░░░░░░</span></td></tr><tr><td>獲利穩定性</td><td class='num'><strong>0.0</strong> / 10</td><td class='num'><span class='bad'>0%</span></td><td><span class='bad'>░░░░░░░░░░░░░░░░░░░░</span></td></tr><tr><td>財務安全</td><td class='num'><strong>5.0</strong> / 5</td><td class='num'><span class='good'>100%</span></td><td><span class='good'>████████████████████</span></td></tr><tr><td>自由現金流</td><td class='num'><span class='missing'>整項資料不足</span></td><td class='num'>—</td><td>—</td></tr><tr><td>Margin of Safety 安全邊際</td><td class='num'><span class='missing'>整項資料不足</span></td><td class='num'>—</td><td>—</td></tr></tbody></table></div><p class='note'>分母是<strong>可評分</strong>滿分，不是項目滿分——資料不足的指標退出分母，不以 0 分計。</p></div><div class='card'><h2>估值與安全邊際</h2><p>僅 0 種估值方法可用，未達交叉驗證所需的 2 種，不計安全邊際分數（規格第三節要求至少 2 種方法交叉驗證）</p><div class='scroll'><table><thead><tr><th>方法</th><th class='num'>每股價值</th><th>假設／理由</th></tr></thead><tbody><tr><td>正常化 EPS × 合理本益比</td><td class='num'><span class='missing'>資料不足</span></td><td class='note'>無歷史本益比資料，無法推估合理本益比</td></tr><tr><td>殖利率法</td><td class='num'><span class='missing'>資料不足</span></td><td class='note'>無現金股利資料，無法以殖利率法估值</td></tr><tr><td>自由現金流折現（DCF）</td><td class='num'><span class='missing'>資料不足</span></td><td class='note'>近年自由現金流缺漏，無法進行 DCF</td></tr><tr><td>PEG＝1 隱含合理本益比</td><td class='num'><span class='missing'>資料不足</span></td><td class='note'>期末值 ≤ 0，CAGR 無定義（由盈轉虧無複合成長率）</td></tr></tbody></table></div></div><div class='card'><h2>紅旗警報</h2><div class='scroll'><table><thead><tr><th>嚴重度</th><th>項目</th><th>依據</th></tr></thead><tbody><tr><td><span class='bad'>🔴 重大</span></td><td>毛利率連續下降</td><td class='note'>毛利率 連續 3 年下降：0.07884 → -0.0009242 → -0.1156 → -0.1783</td></tr><tr><td><span class='warn'>🟠 警告</span></td><td>營業利益率連續下降</td><td class='note'>營益率 連續 3 年下降：-0.009066 → -0.1194 → -0.2519 → -0.3247</td></tr><tr><td><span class='warn'>🟠 警告</span></td><td>業外收益佔比過高</td><td class='note'>近 3 年業外損益佔稅前淨利 96%，超過 40%</td></tr><tr><td><span class='bad'>🔴 重大</span></td><td>護城河弱化</td><td class='note'>近 3 年平均毛利率較前 3 年下降 47.0%，定價權可能正在流失</td></tr></tbody></table></div></div><div class='card'><h2>資料缺口</h2><ul class='note'><li>此為全市場掃描第一階段：資本支出、股利與歷史本益比未載入（這三項只能逐檔向 FinMind 查詢，僅對品質前段班補齊）。FCF、盈再率與安全邊際將標示資料不足，可評分分母因此小於 100</li></ul></div></div></body></html>
