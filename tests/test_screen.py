@@ -204,6 +204,71 @@ class TestStageOneMakesNoPerCompanyRequests:
         assert "official" in calls
 
 
+class TestMarketIsResolvedOnEveryPath:
+    """財報與行情端點分屬證交所與櫃買中心，選錯就整批對不到。
+
+    ``build_lookup_constituent`` 造出來的 constituent 沒有市場別，
+    而掃描的**第二階段**與個股查詢都走那條路。市場別只在
+    ``classify()`` 裡決定，但 ``classify`` 綁 ``ConstituentSet``，
+    只有每日 00929 流程會呼叫——所以那兩條路徑一律被當成上市。
+
+    實測（2026-08-27 全市場掃描）：達爾膚 6523 是上櫃，被拿去問 TWSE，
+    報表留下「TWSE: 找不到欄位 PEratio／殖利率／收盤價」，
+    本益比、股價淨值比、殖利率整排變成資料不足，市場別還印成「上市」。
+    """
+
+    @pytest.fixture
+    def directory_loader(self, loader, monkeypatch):
+        monkeypatch.setattr(loader.finmind, "token", "test-token")
+        monkeypatch.setattr(loader, "_load_history", lambda *a, **k: None)
+        monkeypatch.setattr(
+            loader.finmind,
+            "stock_directory",
+            lambda: {
+                "1111": {"industry": "電子零組件業", "market": "twse"},
+                "2222": {"industry": "生技醫療業", "market": "tpex"},
+            },
+        )
+        return loader
+
+    def test_an_otc_company_is_not_queried_against_the_listed_exchange(
+        self, directory_loader, monkeypatch
+    ):
+        asked = []
+        monkeypatch.setattr(
+            directory_loader.twse,
+            "market_data",
+            lambda stock_id: asked.append("twse") or MarketData(),
+        )
+        monkeypatch.setattr(
+            directory_loader.tpex,
+            "market_data",
+            lambda stock_id: asked.append("tpex") or MarketData(),
+        )
+        monkeypatch.setattr(
+            directory_loader, "_overlay_official", lambda c: directory_loader._overlay_market_only(c)
+        )
+
+        from buffett00929.loader import build_lookup_constituent
+
+        loaded = directory_loader.load_company(build_lookup_constituent("2222"))
+        assert loaded.company.market == "TPEx"
+        assert asked == ["tpex"]
+
+    def test_the_full_path_fills_in_the_industry(self, directory_loader, monkeypatch):
+        """產業別是公司的屬性，不該取決於它走了哪一個階段。
+
+        原本只有第一階段補產業別，所以品質前 50 名——最重要的那些——
+        反而全部顯示「未分類」。
+        """
+        monkeypatch.setattr(directory_loader, "_overlay_official", lambda c: None)
+
+        from buffett00929.loader import build_lookup_constituent
+
+        loaded = directory_loader.load_company(build_lookup_constituent("1111"))
+        assert loaded.company.industry == "電子零組件業"
+
+
 class TestQualityRanking:
     def test_companies_rank_by_business_quality(self, loader):
         from buffett00929.screen import rank_by_quality
