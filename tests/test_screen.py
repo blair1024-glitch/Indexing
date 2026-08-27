@@ -19,6 +19,7 @@ from buffett00929.models import (
     DataPoint,
     FiscalPeriod,
     IncomeStatement,
+    MarketData,
 )
 from buffett00929.sources.mops import MopsHistory
 
@@ -58,26 +59,138 @@ def _history(specs: dict[str, float]) -> MopsHistory:
 
 
 @pytest.fixture
-def loader(tmp_path):
+def loader(tmp_path, monkeypatch):
     loader = DataLoader(config=Config.load(), repo_root=tmp_path)
     loader.history = _history({"1111": 0.55, "2222": 0.40, "3333": 0.12})
+
+    # 第一階段現在會取用 TWSE/TPEx 的**整批**行情端點（抓一次、全市場共用）。
+    # 這裡把它們換成空資料，讓整份測試維持離線——測試不該依賴網路，
+    # 否則在封鎖外網的建置環境裡會卡在重試退避上。
+    # 產業別不必處理：沒有 token 時 _stock_directory 本來就直接短路。
+    monkeypatch.setattr(loader.twse, "market_data", lambda stock_id: MarketData())
+    monkeypatch.setattr(loader.tpex, "market_data", lambda stock_id: MarketData())
     return loader
 
 
 class TestStageOneMakesNoPerCompanyRequests:
-    """第一階段跑 1,975 家。只要有一次逐檔請求溜進去，額度就會瞬間見底。"""
+    """第一階段跑 1,975 家。只要有一次**逐檔**請求溜進去，額度就會瞬間見底。
 
-    def test_history_only_skips_finmind_and_market_data(self, loader, monkeypatch):
+    分界不是「有沒有發請求」，而是「**每家一次**還是**全市場一次**」：
+
+    - TWSE/TPEx 的端點抓整份再以代號建索引（``twse._fetch_indexed`` 的
+      ``_index_cache``），第一檔觸發抓取、後面全是快取命中
+    - FinMind 的股票總覽（``stock_directory``）也是一次涵蓋全市場
+
+    這兩者第一階段可以用，加起來約 5 次請求。真正要擋的是 FinMind 的
+    **逐檔**查詢——股利、資本支出、歷史本益比、逐檔股價。
+    """
+
+    @pytest.fixture
+    def bulk_only(self, loader, monkeypatch):
+        """整批來源換成固定資料；逐檔來源一律引爆。"""
+
         def explode(*args, **kwargs):
             raise AssertionError("第一階段不得發出逐檔請求")
 
+        # 沒有 token 時 _stock_directory 會直接短路，總覽根本不會被呼叫——
+        # 那樣這個測試就驗不到東西了。所有請求都已 mock，token 只是開關。
+        monkeypatch.setattr(loader.finmind, "token", "test-token")
         monkeypatch.setattr(loader, "_load_history", explode)
-        monkeypatch.setattr(loader, "_overlay_official", explode)
+        monkeypatch.setattr(loader.finmind, "latest_price", explode)
+        monkeypatch.setattr(
+            loader.finmind,
+            "stock_directory",
+            lambda: {"1111": {"industry": "半導體業", "market": "twse"}},
+        )
+        monkeypatch.setattr(
+            loader.twse,
+            "market_data",
+            lambda stock_id: MarketData(
+                price=DataPoint.of(123.0, "TWSE STOCK_DAY_ALL"),
+                pe_ratio=DataPoint.of(15.0, "TWSE BWIBBU_ALL"),
+            ),
+        )
+        return loader
+
+    def test_history_only_skips_per_company_sources(self, bulk_only):
+        from buffett00929.loader import build_lookup_constituent
+
+        loaded = bulk_only.load_company(
+            build_lookup_constituent("1111"), history_only=True
+        )
+        assert loaded.company.income_statements
+
+    def test_stage_one_does_not_merge_the_latest_statements(self, bulk_only, monkeypatch):
+        """第一階段的排序只用彙總報表的年度數，混入最新一期沒有意義。"""
+
+        def explode(*args, **kwargs):
+            raise AssertionError("第一階段不該合併最新一期財報")
+
+        monkeypatch.setattr(bulk_only, "_overlay_official", explode)
 
         from buffett00929.loader import build_lookup_constituent
 
-        loaded = loader.load_company(build_lookup_constituent("1111"), history_only=True)
-        assert loaded.company.income_statements
+        bulk_only.load_company(build_lookup_constituent("1111"), history_only=True)
+
+    def test_stage_one_still_gets_industry_and_price(self, bulk_only):
+        """擋逐檔請求不該連整批端點一起擋掉——那是白丟資料，不是省額度。"""
+        from buffett00929.loader import build_lookup_constituent
+
+        loaded = bulk_only.load_company(
+            build_lookup_constituent("1111"), history_only=True
+        )
+        assert loaded.company.industry == "半導體業"
+        assert loaded.company.market_data.price.value == 123.0
+        assert loaded.company.market_data.pe_ratio.value == 15.0
+
+    def test_the_directory_is_fetched_once_for_the_whole_market(self, loader, monkeypatch):
+        """1,975 家共用一份總覽。每家各抓一次就是 1,975 次請求。"""
+        calls = []
+
+        def counted():
+            calls.append(1)
+            return {"1111": {"industry": "半導體業", "market": "twse"}}
+
+        monkeypatch.setattr(loader.finmind, "token", "test-token")
+        monkeypatch.setattr(loader, "_load_history", lambda *a, **k: None)
+        monkeypatch.setattr(loader.finmind, "stock_directory", counted)
+        monkeypatch.setattr(
+            loader.twse, "market_data", lambda stock_id: MarketData()
+        )
+
+        from buffett00929.loader import build_lookup_constituent
+
+        for stock_id in ("1111", "2222", "3333"):
+            loader.load_company(build_lookup_constituent(stock_id), history_only=True)
+
+        assert len(calls) == 1
+
+    def test_a_directory_failure_does_not_retry_per_company(self, loader, monkeypatch):
+        """總覽抓失敗就整批放棄，不能退化成逐檔重試。"""
+        from buffett00929.sources.base import SourceUnavailable
+
+        calls = []
+
+        def failing():
+            calls.append(1)
+            raise SourceUnavailable("額度用盡")
+
+        monkeypatch.setattr(loader.finmind, "token", "test-token")
+        monkeypatch.setattr(loader, "_load_history", lambda *a, **k: None)
+        monkeypatch.setattr(loader.finmind, "stock_directory", failing)
+        monkeypatch.setattr(
+            loader.twse, "market_data", lambda stock_id: MarketData()
+        )
+
+        from buffett00929.loader import build_lookup_constituent
+
+        for stock_id in ("1111", "2222", "3333"):
+            loaded = loader.load_company(
+                build_lookup_constituent(stock_id), history_only=True
+            )
+            assert loaded.company.industry == "未分類"
+
+        assert len(calls) == 1
 
     def test_the_full_path_still_calls_them(self, loader, monkeypatch):
         """這道開關不能把主流程一起關掉。"""

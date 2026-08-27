@@ -106,7 +106,7 @@ class TestHtmlDashboard:
         """CSP 與離線可用性：不得有任何外部**資源請求**。
 
         擋的是會發出請求的東西（``src=``、``<link href=``），不是 ``<a href>``。
-        導覽列上的「查詢新個股」連到 GitHub Actions——那是**導覽**，
+        個股清單頁底下連到 GitHub Actions 當退路——那是**導覽**，
         不載入任何資源、不影響離線開啟、不違反 CSP。
         原本寫成 `'href="http' not in html`，會連導覽連結一起擋掉，
         而且只擋雙引號（本檔案的 HTML 屬性用單引號），等於兩頭都不準。
@@ -365,7 +365,7 @@ class TestNavigation:
         )
         for html in pages:
             assert "<nav class='nav'>" in html
-            for label in ("00929 每日", "全市場掃描", "個股頁面", "查詢新個股"):
+            for label in ("00929 每日", "全市場掃描", "查詢個股"):
                 assert label in html
 
     def test_company_page_nav_climbs_out_of_lookup(self, run):
@@ -400,10 +400,21 @@ class TestNavigation:
         assert "<span class='here'>🏠 00929 每日</span>" in nav
         assert "href='index.html'" not in nav
 
-    def test_lookup_query_points_at_the_workflow(self, run):
-        """個股查詢是 workflow_dispatch，靜態頁只能把人帶到 Actions。"""
+    def test_the_nav_keeps_stock_lookup_on_site(self, run):
+        """使用者明講過：把人丟去 Actions 按 Run workflow「不是我要的」。
+
+        全市場的個股頁都預先產生好了，站內就查得到，導覽列不該再連出去。
+        """
         html = dashboard.render_dashboard(run)
-        assert dashboard.LOOKUP_WORKFLOW_URL in html
+        nav = html.split("</nav>")[0]
+        assert "href='lookup/index.html'" in nav
+        assert dashboard.LOOKUP_WORKFLOW_URL not in nav
+
+    def test_the_workflow_stays_available_as_a_fallback(self, run, tmp_path):
+        """沒產生過的股票（新上市、興櫃）還是得有辦法查。"""
+        dashboard.write_company_dashboards(run.results[:1], tmp_path)
+        index = (tmp_path / "docs" / "lookup" / "index.html").read_text(encoding="utf-8")
+        assert dashboard.LOOKUP_WORKFLOW_URL in index
         assert dashboard.LOOKUP_WORKFLOW_URL.endswith("/analyse-stock.yml")
 
 
@@ -498,6 +509,131 @@ class TestLookupIndex:
         dashboard.write_company_dashboards(run.results[:1], tmp_path)
         index = (tmp_path / "docs" / "lookup" / "index.html").read_text(encoding="utf-8")
         # 自己這一頁不給連結，其他三項要連得出去。
-        assert "<span class='here'>📇 個股頁面</span>" in index
+        assert "<span class='here'>🔎 查詢個股</span>" in index
         assert "href='../index.html'" in index
         assert "href='../screen.html'" in index
+
+
+class TestStageOnePagesSayWhatIsMissing:
+    """「還沒算」和「算不出來」長得一模一樣，結論卻相反。
+
+    第一階段不補股利與資本支出，估值因此顯示「僅 0 種方法可用」——
+    那句話讀起來像試過但失敗，實際上是根本沒去拿資料。讀者若照字面理解，
+    會以為這家公司估不出價，而不是我們還沒估。
+    """
+
+    def _stage_one(self, run):
+        from buffett00929.models import STAGE_ONE_GAP
+
+        result = copy.deepcopy(run.results[0])
+        result.company.data_gaps.append(f"{STAGE_ONE_GAP}：資本支出、股利與歷史本益比未載入")
+        return result
+
+    def test_stage_one_page_says_valuation_was_not_attempted(self, run):
+        html = dashboard.render_company_dashboard(self._stage_one(run))
+        assert "只做了第一階段" in html
+        assert "還沒算" in html
+
+    def test_a_fully_valued_page_carries_no_such_banner(self, run):
+        html = dashboard.render_company_dashboard(run.results[0])
+        assert "只做了第一階段" not in html
+
+
+class TestFundamentalsCard:
+    def test_the_card_names_the_industry_and_market(self, run):
+        result = copy.deepcopy(run.results[0])
+        result.company.industry = "半導體業"
+        result.company.market = "TWSE"
+        html = dashboard.render_company_dashboard(result)
+        assert "基本面" in html
+        assert "半導體業" in html
+        assert "上市" in html
+
+    def test_over_the_counter_is_not_reported_as_listed(self, run):
+        result = copy.deepcopy(run.results[0])
+        result.company.market = "TPEx"
+        html = dashboard.render_company_dashboard(result)
+        assert "上櫃" in html
+
+    def test_a_missing_field_reads_as_missing_not_as_zero(self, run):
+        """規格核心：查不到不能長得像「表現很差」。"""
+        from buffett00929.models import DataPoint, MarketData
+
+        result = copy.deepcopy(run.results[0])
+        result.company.market_data = MarketData(
+            price=DataPoint.missing("缺股價")
+        )
+        html = dashboard.render_company_dashboard(result)
+        assert "<span class='missing'>資料不足</span>" in html
+
+
+class TestEveryCompanyGetsAPage:
+    """第一階段本來就對全市場算完分數了，只寫前 50 名等於算完丟掉。"""
+
+    def _screen(self, run):
+        from buffett00929.screen import ScreenResult
+
+        return ScreenResult(
+            quality_ranked=run.results, valued=run.results[:2], universe_size=1975
+        )
+
+    def test_all_companies_covers_the_whole_ranking(self, run):
+        result = self._screen(run)
+        assert len(result.all_companies) == len(run.results)
+
+    def test_the_valued_version_wins(self, run):
+        """同一家會出現兩次：第一階段 77 分制、第二階段 100 分制。
+
+        取到第一階段那份等於把已經算出來的安全邊際丟掉。
+        """
+        from buffett00929.models import STAGE_ONE_GAP
+        from buffett00929.screen import ScreenResult
+
+        stage_one = copy.deepcopy(run.results[0])
+        stage_one.company.data_gaps.append(f"{STAGE_ONE_GAP}：未載入")
+        valued = run.results[0]
+
+        result = ScreenResult(
+            quality_ranked=[stage_one], valued=[valued], universe_size=1975
+        )
+        picked = result.all_companies
+        assert len(picked) == 1
+        assert picked[0] is valued
+
+    def test_the_writer_receives_every_company(self, run, tmp_path):
+        written = dashboard.write_company_dashboards(
+            self._screen(run).all_companies, tmp_path
+        )
+        assert len(written) == len(run.results)
+
+
+class TestLookupSearch:
+    def test_the_index_carries_a_search_box(self, run, tmp_path):
+        dashboard.write_company_dashboards(run.results[:3], tmp_path)
+        index = (tmp_path / "docs" / "lookup" / "index.html").read_text(encoding="utf-8")
+        assert "id='q'" in index
+        assert "<script>" in index
+
+    def test_rows_carry_searchable_text_for_id_and_name(self, run, tmp_path):
+        dashboard.write_company_dashboards(run.results[:3], tmp_path)
+        index = (tmp_path / "docs" / "lookup" / "index.html").read_text(encoding="utf-8")
+        for result in run.results[:3]:
+            needle = f"data-q='{result.company.stock_id} {result.company.name}'"
+            assert needle in index
+
+    def test_the_table_still_lists_everyone_without_js(self, run, tmp_path):
+        """搜尋是便利品，不是進入頁面的必要條件。
+
+        用 JS 產生列表的話，關掉 JS 就整頁空白——所以是過濾既有的列。
+        """
+        dashboard.write_company_dashboards(run.results[:3], tmp_path)
+        index = (tmp_path / "docs" / "lookup" / "index.html").read_text(encoding="utf-8")
+        table = index.split("<script>")[0]
+        for result in run.results[:3]:
+            assert f"href='{result.company.stock_id}.html'" in table
+
+    def test_the_search_stays_self_contained(self, run, tmp_path):
+        dashboard.write_company_dashboards(run.results[:3], tmp_path)
+        index = (tmp_path / "docs" / "lookup" / "index.html").read_text(encoding="utf-8")
+        assert "src='http" not in index and 'src="http' not in index
+        assert "<link" not in index
