@@ -18,7 +18,7 @@ from datetime import date
 from pathlib import Path
 
 from .config import Config
-from .models import Company, DataPoint, MarketData
+from .models import STAGE_ONE_GAP, Company, DataPoint, MarketData
 from .normalize import (
     CumulativeDetection,
     detect_cumulative,
@@ -58,6 +58,9 @@ class DataLoader:
     history: MopsHistory | None = field(default=None, init=False)
     """MOPS 全市場歷史索引。整批抓一次，所有公司共用。"""
     warnings: list[str] = field(default_factory=list)
+    _directory: dict[str, dict[str, str]] | None = field(default=None, init=False)
+    """FinMind 全市場總覽（代號 → 產業別、市場別）。一次請求涵蓋整個市場。"""
+    _directory_tried: bool = field(default=False, init=False)
 
     def __post_init__(self) -> None:
         sources = self.config.sources
@@ -124,14 +127,22 @@ class DataLoader:
         # --- 1. 多年度歷史（MOPS 彙總報表，官方）------------------------------
         from_mops = self._load_from_mops(company)
 
-        # ``history_only`` 給全市場掃描的第一階段用：只吃已經整批回補好的
-        # 彙總報表，**不發出任何逐檔請求**。FinMind 是逐檔且有速率上限，
-        # 1,975 家全部補齊需要近萬次請求；漏一個逐檔呼叫進來，額度就見底了。
+        # ``history_only`` 給全市場掃描的第一階段用。守的是 **FinMind 額度**：
+        # 它逐檔查詢且有速率上限，1,975 家全部補齊要近萬次請求，
+        # 漏一個逐檔呼叫進來額度就見底。
+        #
+        # 但**整批端點不是同一回事**。TWSE/TPEx 的每個端點都是抓整份再以代號
+        # 建索引（見 twse._fetch_indexed 的 _index_cache），第一檔觸發抓取、
+        # 後面 1,974 檔全是快取命中；FinMind 的股票總覽也是一次涵蓋全市場。
+        # 兩者加起來約 5 次請求，就能讓全市場都有股價、本益比、淨值比、
+        # 殖利率與產業別——把它們一起擋掉是白白丟資料，不是省額度。
         if history_only:
+            self._apply_directory(company)
+            self._overlay_market_only(company)
             company.note_gap(
-                "此為全市場掃描第一階段，只用彙總報表："
-                "資本支出、股利、歷史本益比與股價未載入"
-                "（FCF、盈再率與安全邊際將標示資料不足，可評分分母因此小於 100）"
+                f"{STAGE_ONE_GAP}：資本支出、股利與歷史本益比未載入"
+                "（這三項只能逐檔向 FinMind 查詢，僅對品質前段班補齊）。"
+                "FCF、盈再率與安全邊際將標示資料不足，可評分分母因此小於 100"
             )
             return self._normalise(company, from_mops)
 
@@ -265,6 +276,58 @@ class DataLoader:
         except (SourceUnavailable, FetchError) as exc:
             company.note_gap(f"歷史本益比未載入：{exc}（合理本益比將改用設定值上下限）")
 
+    def _stock_directory(self) -> dict[str, dict[str, str]]:
+        """FinMind 全市場總覽，整個執行只抓一次。
+
+        一次請求就涵蓋所有上市櫃公司的產業別與市場別，**不是逐檔查詢**，
+        所以第一階段用它不會動到額度預算。
+        """
+        if self._directory_tried:
+            return self._directory or {}
+        self._directory_tried = True
+
+        if not self.finmind.is_available:
+            return {}
+        try:
+            self._directory = self.finmind.stock_directory()
+        except (SourceUnavailable, FetchError) as exc:
+            self.warnings.append(f"FinMind 股票總覽未載入，產業別將標示未分類：{exc}")
+            self._directory = {}
+        return self._directory or {}
+
+    def _apply_directory(self, company: Company) -> None:
+        """補上產業別與市場別。
+
+        市場別要在抓市場資料**之前**定好：財報與行情端點分屬證交所與
+        櫃買中心，選錯就整批對不到。``build_lookup_constituent`` 造出來的
+        constituent 沒有市場別，掃描與個股查詢都走這條路。
+        """
+        entry = self._stock_directory().get(company.stock_id)
+        if not entry:
+            return
+        if entry.get("market"):
+            company.market = "TPEx" if "tpex" in entry["market"].lower() else "TWSE"
+        if entry.get("industry"):
+            company.industry = entry["industry"]
+
+    def _overlay_market_only(self, company: Company) -> None:
+        """只取整批端點的行情（股價、本益比、淨值比、殖利率）。
+
+        與 ``_overlay_official`` 的差別是**刻意不做**兩件事：不合併最新一期
+        財報（第一階段的排序只用彙總報表的年度數，混入最新一期沒有意義），
+        也不在缺股價時退回 ``finmind.latest_price``——那是逐檔查詢，
+        1,975 家跑下來就是 1,975 次請求。
+        """
+        client = self.tpex if company.market.upper() == "TPEX" else self.twse
+        try:
+            market = client.market_data(company.stock_id)
+        except SourceUnavailable as exc:
+            company.note_gap(f"官方市場資料未載入：{exc}")
+            return
+        pe_history = company.market_data.pe_history
+        company.market_data = market
+        company.market_data.pe_history = pe_history
+
     def _overlay_official(self, company: Company) -> None:
         """以官方最新一期覆蓋 FinMind 同期資料（規格第十九節：官方優先）。"""
         client = self.tpex if company.market.upper() == "TPEX" else self.twse
@@ -334,22 +397,19 @@ class DataLoader:
         """
         industries: dict[str, str] = {}
 
-        if self.finmind.is_available:
-            try:
-                directory = self.finmind.stock_directory()
-            except (SourceUnavailable, FetchError) as exc:
-                self.warnings.append(f"FinMind 股票總覽未載入，改用證交所清單判定市場別：{exc}")
-            else:
-                for constituent in constituents.constituents:
-                    entry = directory.get(constituent.stock_id)
-                    if not entry:
-                        continue
-                    if entry["market"]:
-                        constituent.market = "TPEx" if "tpex" in entry["market"].lower() else "TWSE"
-                    if entry["industry"]:
-                        industries[constituent.stock_id] = entry["industry"]
-                if industries:
-                    return industries
+        # 走共用快取：掃描的第一階段也要這份總覽，整個執行只該抓一次。
+        directory = self._stock_directory()
+        if directory:
+            for constituent in constituents.constituents:
+                entry = directory.get(constituent.stock_id)
+                if not entry:
+                    continue
+                if entry["market"]:
+                    constituent.market = "TPEx" if "tpex" in entry["market"].lower() else "TWSE"
+                if entry["industry"]:
+                    industries[constituent.stock_id] = entry["industry"]
+            if industries:
+                return industries
 
         try:
             listed = self.twse._fetch_indexed("daily_price", id_fields=("Code", "公司代號"))

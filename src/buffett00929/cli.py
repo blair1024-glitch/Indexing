@@ -121,7 +121,9 @@ def _cmd_screen(config: Config, args) -> int:
               f"品質 {r.score.business_quality_score:.1f}　"
               f"可評分 {r.score.scorable_max:.0f}")
     board = write_screen_dashboard(result, repo_root)
-    boards = write_company_dashboards(result.valued, repo_root)
+    # 全市場都寫：第一階段本來就對每一家算完分數了，只寫前 50 名等於
+    # 算完丟掉 1,900 多家。靜態站沒有後端，預先寫出來才查得到。
+    boards = write_company_dashboards(result.all_companies, repo_root)
 
     print(f"\n完整報表：{path.relative_to(repo_root)}")
     print(f"Dashboard：{board.relative_to(repo_root)}（另有 {len(boards)} 份逐檔頁面）\n")

@@ -85,6 +85,20 @@ class ScreenResult:
         return bool(self.valued) and self.valuation_coverage < self.DEGRADED_BELOW
 
     @property
+    def all_companies(self) -> list[CompanyResult]:
+        """每一家有評分的公司，前段班取「補齊估值後」的版本。
+
+        同一家公司可能出現兩次：第一階段算過品質（約 77 分制），
+        第二階段又補了估值（100 分制）。寫頁面要取後者——取前者等於
+        把已經算出來的安全邊際丟掉，而那正是讀者最想看的東西。
+
+        順序沿用第一階段的品質排序（``dict`` 保留插入順序）。
+        """
+        merged = {r.company.stock_id: r for r in self.quality_ranked}
+        merged.update({r.company.stock_id: r for r in self.valued})
+        return list(merged.values())
+
+    @property
     def buy_candidates(self) -> list[CompanyResult]:
         from .scoring.engine import VERDICT_BUY
 

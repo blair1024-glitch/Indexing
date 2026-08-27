@@ -74,6 +74,15 @@ h2:first-of-type { margin-top: 1.5rem; }
 .tile .label { color: var(--muted); font-size: .78rem; margin-bottom: .3rem; }
 .tile .value { font-size: 1.3rem; font-weight: 600; letter-spacing: -.02em; }
 .tile .note { color: var(--muted); font-size: .74rem; margin-top: .2rem; }
+/* 基本面那排放的是「半導體業」「1,234.5 億」這種字串，不是兩三位數字，
+   用 .value 的 1.3rem 會擠成兩行。 */
+.tile .value.small { font-size: 1rem; }
+.search {
+  width: 100%; padding: .7rem .85rem; margin: 0 0 .5rem;
+  border: 1px solid var(--border); border-radius: 8px;
+  background: var(--bg); color: var(--text); font: inherit;
+}
+.search:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow); overflow: hidden; margin-bottom: 1rem; }
 .scroll { overflow-x: auto; }
 table { border-collapse: collapse; width: 100%; font-size: .88rem; min-width: 640px; }
@@ -94,4 +103,39 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .empty { color: var(--muted); padding: 1rem; }
 footer { margin-top: 3rem; padding-top: 1.25rem; border-top: 1px solid var(--border); color: var(--muted); font-size: .82rem; }
 ul.gaps { margin: .4rem 0 1rem; padding-left: 1.25rem; color: var(--muted); font-size: .86rem; }
-</style></head><body><div class='wrap'><nav class='nav'><a href='../index.html'>🏠 00929 每日</a><a href='../screen.html'>🔍 全市場掃描</a><span class='here'>📇 個股頁面</span><a href='https://github.com/blair1024-glitch/Indexing/actions/workflows/analyse-stock.yml'>⚡ 查詢新個股</a></nav><header><h1>個股頁面</h1><p class='sub'>目前有 50 檔，依股號排序。</p></header><div class='card'><div class='scroll'><table><thead><tr><th>公司</th><th>代號</th></tr></thead><tbody><tr><td><a href='1477.html'>聚陽</a></td><td>1477</td></tr><tr><td><a href='1513.html'>中興電</a></td><td>1513</td></tr><tr><td><a href='1590.html'>亞德客-KY</a></td><td>1590</td></tr><tr><td><a href='1720.html'>生達</a></td><td>1720</td></tr><tr><td><a href='2330.html'>台積電</a></td><td>2330</td></tr><tr><td><a href='2360.html'>致茂</a></td><td>2360</td></tr><tr><td><a href='2368.html'>金像電</a></td><td>2368</td></tr><tr><td><a href='2423.html'>固緯</a></td><td>2423</td></tr><tr><td><a href='2449.html'>京元電子</a></td><td>2449</td></tr><tr><td><a href='2471.html'>資通</a></td><td>2471</td></tr><tr><td><a href='2640.html'>大車隊</a></td><td>2640</td></tr><tr><td><a href='2752.html'>豆府</a></td><td>2752</td></tr><tr><td><a href='2891.html'>中信金</a></td><td>2891</td></tr><tr><td><a href='3030.html'>德律</a></td><td>3030</td></tr><tr><td><a href='3158.html'>嘉實</a></td><td>3158</td></tr><tr><td><a href='3217.html'>優群</a></td><td>3217</td></tr><tr><td><a href='3218.html'>大學光</a></td><td>3218</td></tr><tr><td><a href='3526.html'>凡甲</a></td><td>3526</td></tr><tr><td><a href='3529.html'>力旺</a></td><td>3529</td></tr><tr><td><a href='3533.html'>嘉澤</a></td><td>3533</td></tr><tr><td><a href='3570.html'>大塚</a></td><td>3570</td></tr><tr><td><a href='3653.html'>健策</a></td><td>3653</td></tr><tr><td><a href='4105.html'>東洋</a></td><td>4105</td></tr><tr><td><a href='4107.html'>邦特</a></td><td>4107</td></tr><tr><td><a href='4417.html'>金洲</a></td><td>4417</td></tr><tr><td><a href='4728.html'>雙美</a></td><td>4728</td></tr><tr><td><a href='4771.html'>望隼</a></td><td>4771</td></tr><tr><td><a href='4951.html'>精拓科</a></td><td>4951</td></tr><tr><td><a href='5212.html'>凌網</a></td><td>5212</td></tr><tr><td><a href='5274.html'>信驊</a></td><td>5274</td></tr><tr><td><a href='5519.html'>隆大</a></td><td>5519</td></tr><tr><td><a href='5520.html'>力泰</a></td><td>5520</td></tr><tr><td><a href='6183.html'>關貿</a></td><td>6183</td></tr><tr><td><a href='6197.html'>佳必琪</a></td><td>6197</td></tr><tr><td><a href='6223.html'>旺矽</a></td><td>6223</td></tr><tr><td><a href='6263.html'>普萊德</a></td><td>6263</td></tr><tr><td><a href='6291.html'>沛亨</a></td><td>6291</td></tr><tr><td><a href='6523.html'>達爾膚</a></td><td>6523</td></tr><tr><td><a href='6530.html'>創威</a></td><td>6530</td></tr><tr><td><a href='6534.html'>正瀚-創</a></td><td>6534</td></tr><tr><td><a href='6561.html'>是方</a></td><td>6561</td></tr><tr><td><a href='6741.html'>91APP*-KY</a></td><td>6741</td></tr><tr><td><a href='6782.html'>視陽</a></td><td>6782</td></tr><tr><td><a href='6788.html'>華景電</a></td><td>6788</td></tr><tr><td><a href='6855.html'>數泓科</a></td><td>6855</td></tr><tr><td><a href='8069.html'>元太</a></td><td>8069</td></tr><tr><td><a href='8416.html'>實威</a></td><td>8416</td></tr><tr><td><a href='8464.html'>億豐</a></td><td>8464</td></tr><tr><td><a href='8996.html'>高力</a></td><td>8996</td></tr><tr><td><a href='9911.html'>櫻花</a></td><td>9911</td></tr></tbody></table></div></div><p class='note'>清單只涵蓋<strong>已經產生過</strong>的頁面。要查沒在上面的股票，用上方「查詢新個股」跑一次 Action。</p></div></body></html>
+</style></head><body><div class='wrap'><nav class='nav'><a href='../index.html'>🏠 00929 每日</a><a href='../screen.html'>🔍 全市場掃描</a><span class='here'>🔎 查詢個股</span></nav><header><h1>個股頁面</h1><p class='sub'>目前有 50 檔，依股號排序。</p></header><div class='card'><input id='q' class='search' type='search' autocomplete='off' placeholder='輸入股號或公司名（例如 2330、台積電），按 Enter 直接開啟'><p id='hit' class='note'></p><div class='scroll'><table><thead><tr><th>公司</th><th>代號</th></tr></thead><tbody id='rows'><tr data-q='1477 聚陽'><td><a href='1477.html'>聚陽</a></td><td>1477</td></tr><tr data-q='1513 中興電'><td><a href='1513.html'>中興電</a></td><td>1513</td></tr><tr data-q='1590 亞德客-KY'><td><a href='1590.html'>亞德客-KY</a></td><td>1590</td></tr><tr data-q='1720 生達'><td><a href='1720.html'>生達</a></td><td>1720</td></tr><tr data-q='2330 台積電'><td><a href='2330.html'>台積電</a></td><td>2330</td></tr><tr data-q='2360 致茂'><td><a href='2360.html'>致茂</a></td><td>2360</td></tr><tr data-q='2368 金像電'><td><a href='2368.html'>金像電</a></td><td>2368</td></tr><tr data-q='2423 固緯'><td><a href='2423.html'>固緯</a></td><td>2423</td></tr><tr data-q='2449 京元電子'><td><a href='2449.html'>京元電子</a></td><td>2449</td></tr><tr data-q='2471 資通'><td><a href='2471.html'>資通</a></td><td>2471</td></tr><tr data-q='2640 大車隊'><td><a href='2640.html'>大車隊</a></td><td>2640</td></tr><tr data-q='2752 豆府'><td><a href='2752.html'>豆府</a></td><td>2752</td></tr><tr data-q='2891 中信金'><td><a href='2891.html'>中信金</a></td><td>2891</td></tr><tr data-q='3030 德律'><td><a href='3030.html'>德律</a></td><td>3030</td></tr><tr data-q='3158 嘉實'><td><a href='3158.html'>嘉實</a></td><td>3158</td></tr><tr data-q='3217 優群'><td><a href='3217.html'>優群</a></td><td>3217</td></tr><tr data-q='3218 大學光'><td><a href='3218.html'>大學光</a></td><td>3218</td></tr><tr data-q='3526 凡甲'><td><a href='3526.html'>凡甲</a></td><td>3526</td></tr><tr data-q='3529 力旺'><td><a href='3529.html'>力旺</a></td><td>3529</td></tr><tr data-q='3533 嘉澤'><td><a href='3533.html'>嘉澤</a></td><td>3533</td></tr><tr data-q='3570 大塚'><td><a href='3570.html'>大塚</a></td><td>3570</td></tr><tr data-q='3653 健策'><td><a href='3653.html'>健策</a></td><td>3653</td></tr><tr data-q='4105 東洋'><td><a href='4105.html'>東洋</a></td><td>4105</td></tr><tr data-q='4107 邦特'><td><a href='4107.html'>邦特</a></td><td>4107</td></tr><tr data-q='4417 金洲'><td><a href='4417.html'>金洲</a></td><td>4417</td></tr><tr data-q='4728 雙美'><td><a href='4728.html'>雙美</a></td><td>4728</td></tr><tr data-q='4771 望隼'><td><a href='4771.html'>望隼</a></td><td>4771</td></tr><tr data-q='4951 精拓科'><td><a href='4951.html'>精拓科</a></td><td>4951</td></tr><tr data-q='5212 凌網'><td><a href='5212.html'>凌網</a></td><td>5212</td></tr><tr data-q='5274 信驊'><td><a href='5274.html'>信驊</a></td><td>5274</td></tr><tr data-q='5519 隆大'><td><a href='5519.html'>隆大</a></td><td>5519</td></tr><tr data-q='5520 力泰'><td><a href='5520.html'>力泰</a></td><td>5520</td></tr><tr data-q='6183 關貿'><td><a href='6183.html'>關貿</a></td><td>6183</td></tr><tr data-q='6197 佳必琪'><td><a href='6197.html'>佳必琪</a></td><td>6197</td></tr><tr data-q='6223 旺矽'><td><a href='6223.html'>旺矽</a></td><td>6223</td></tr><tr data-q='6263 普萊德'><td><a href='6263.html'>普萊德</a></td><td>6263</td></tr><tr data-q='6291 沛亨'><td><a href='6291.html'>沛亨</a></td><td>6291</td></tr><tr data-q='6523 達爾膚'><td><a href='6523.html'>達爾膚</a></td><td>6523</td></tr><tr data-q='6530 創威'><td><a href='6530.html'>創威</a></td><td>6530</td></tr><tr data-q='6534 正瀚-創'><td><a href='6534.html'>正瀚-創</a></td><td>6534</td></tr><tr data-q='6561 是方'><td><a href='6561.html'>是方</a></td><td>6561</td></tr><tr data-q='6741 91APP*-KY'><td><a href='6741.html'>91APP*-KY</a></td><td>6741</td></tr><tr data-q='6782 視陽'><td><a href='6782.html'>視陽</a></td><td>6782</td></tr><tr data-q='6788 華景電'><td><a href='6788.html'>華景電</a></td><td>6788</td></tr><tr data-q='6855 數泓科'><td><a href='6855.html'>數泓科</a></td><td>6855</td></tr><tr data-q='8069 元太'><td><a href='8069.html'>元太</a></td><td>8069</td></tr><tr data-q='8416 實威'><td><a href='8416.html'>實威</a></td><td>8416</td></tr><tr data-q='8464 億豐'><td><a href='8464.html'>億豐</a></td><td>8464</td></tr><tr data-q='8996 高力'><td><a href='8996.html'>高力</a></td><td>8996</td></tr><tr data-q='9911 櫻花'><td><a href='9911.html'>櫻花</a></td><td>9911</td></tr></tbody></table></div></div><p class='note'>清單涵蓋<strong>已經產生過</strong>的頁面。要查沒在上面的股票（新上市、興櫃），到 <a href='https://github.com/blair1024-glitch/Indexing/actions/workflows/analyse-stock.yml'>Actions 的個股查詢</a> 跑一次。</p><script>
+(function () {
+  var box = document.getElementById('q');
+  var hit = document.getElementById('hit');
+  var rows = Array.prototype.slice.call(
+    document.getElementById('rows').getElementsByTagName('tr')
+  );
+  function filter() {
+    var q = box.value.trim().toLowerCase();
+    var shown = 0;
+    for (var i = 0; i < rows.length; i++) {
+      var match = !q || rows[i].getAttribute('data-q').toLowerCase().indexOf(q) !== -1;
+      rows[i].style.display = match ? '' : 'none';
+      if (match) shown++;
+    }
+    hit.textContent = q ? (shown + ' 檔符合') : '';
+  }
+  box.addEventListener('input', filter);
+  box.addEventListener('keydown', function (e) {
+    if (e.key !== 'Enter') return;
+    // 完全命中股號就直接開，不用再點一次。
+    var q = box.value.trim();
+    for (var i = 0; i < rows.length; i++) {
+      if (rows[i].style.display === 'none') continue;
+      var link = rows[i].getElementsByTagName('a')[0];
+      var id = rows[i].getAttribute('data-q').split(' ')[0];
+      if (id === q) { location.href = link.getAttribute('href'); return; }
+    }
+    // 沒有完全命中就開唯一的那一筆；多筆時留在原地讓使用者自己挑。
+    var visible = rows.filter(function (r) { return r.style.display !== 'none'; });
+    if (visible.length === 1) {
+      location.href = visible[0].getElementsByTagName('a')[0].getAttribute('href');
+    }
+  });
+})();
+</script></div></body></html>

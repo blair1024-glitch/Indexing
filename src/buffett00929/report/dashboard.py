@@ -14,6 +14,7 @@ import json
 import re
 from pathlib import Path
 
+from ..models import STAGE_ONE_GAP, DataPoint
 from ..pipeline import AnalysisRun, CompanyResult
 from . import format as fmt
 
@@ -93,6 +94,15 @@ h2:first-of-type { margin-top: 1.5rem; }
 .tile .label { color: var(--muted); font-size: .78rem; margin-bottom: .3rem; }
 .tile .value { font-size: 1.3rem; font-weight: 600; letter-spacing: -.02em; }
 .tile .note { color: var(--muted); font-size: .74rem; margin-top: .2rem; }
+/* 基本面那排放的是「半導體業」「1,234.5 億」這種字串，不是兩三位數字，
+   用 .value 的 1.3rem 會擠成兩行。 */
+.tile .value.small { font-size: 1rem; }
+.search {
+  width: 100%; padding: .7rem .85rem; margin: 0 0 .5rem;
+  border: 1px solid var(--border); border-radius: 8px;
+  background: var(--bg); color: var(--text); font: inherit;
+}
+.search:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow); overflow: hidden; margin-bottom: 1rem; }
 .scroll { overflow-x: auto; }
 table { border-collapse: collapse; width: 100%; font-size: .88rem; min-width: 640px; }
@@ -140,9 +150,10 @@ def _nav(*, prefix: str = "", current: str = "") -> str:
     items = (
         ("index", "🏠 00929 每日", f"{prefix}index.html"),
         ("screen", "🔍 全市場掃描", f"{prefix}screen.html"),
-        ("lookup", "📇 個股頁面", f"{prefix}lookup/index.html"),
-        # 外部連結：靜態頁不能觸發 Action，只能把人帶過去。
-        ("query", "⚡ 查詢新個股", LOOKUP_WORKFLOW_URL),
+        # 全市場的個股頁都預先產生好了，查股號在站內就查得到，
+        # 不必把人丟去 Actions 等一次 workflow 跑完。
+        # 真的沒產生過的（新上市、興櫃）才在清單頁底下給 Action 當退路。
+        ("lookup", "🔎 查詢個股", f"{prefix}lookup/index.html"),
     )
     cells = [
         f"<span class='here'>{_esc(label)}</span>"
@@ -552,6 +563,70 @@ def _valuation_card(result: CompanyResult) -> str:
     )
 
 
+def _is_stage_one(company) -> bool:
+    """這家公司是否只跑過全市場掃描的第一階段。
+
+    看的是 loader 留下的缺料註記，不另外加旗標——資料自己說得清楚，
+    多一個欄位就多一個會不同步的地方。
+    """
+    return any(gap.startswith(STAGE_ONE_GAP) for gap in company.data_gaps)
+
+
+def _market_cap(company) -> DataPoint:
+    """市值＝股價 × 股數。
+
+    沒有任何來源直接給市值，得自己算。股數走 ``valuation.share_count``——
+    那是通過三路交叉驗算的那一個；改用「股本 ÷ 面額」會讓面額非 10 元的
+    公司市值整個失真。
+    """
+    from ..scoring.valuation import share_count
+
+    price = company.market_data.price
+    shares = share_count(company)
+    if not price.is_available or price.value is None or price.value <= 0:
+        return DataPoint.missing(price.unavailable_reason or "缺股價，無法計算市值")
+    if not shares.is_available or shares.value is None:
+        return DataPoint.missing(shares.unavailable_reason or "缺股數，無法計算市值")
+    return DataPoint.derived(price.value * shares.value, inputs=[price, shares])
+
+
+def _fundamentals_card(company) -> str:
+    """基本面：這家公司是做什麼的、多大、現在多少錢。
+
+    評分與估值回答「值不值得買」，但讀者得先知道**這是一家什麼公司**。
+    """
+    revenue = (
+        company.income_statements[-1].revenue
+        if company.income_statements
+        else DataPoint.missing("無損益表")
+    )
+    market_name = "上櫃" if company.market.upper() == "TPEX" else "上市"
+
+    rows = [
+        ("產業別", _esc(company.industry)),
+        ("市場別", market_name),
+        ("最新年度營收", _cell(fmt.money(revenue))),
+        ("市值", _cell(fmt.money(_market_cap(company)))),
+        ("股價", _cell(fmt.num(company.market_data.price, 2, " 元"))),
+        ("本益比", _cell(fmt.multiple(company.market_data.pe_ratio))),
+        ("股價淨值比", _cell(fmt.multiple(company.market_data.pb_ratio))),
+        ("現金殖利率", _cell(fmt.pct(company.market_data.dividend_yield))),
+    ]
+    cells = "".join(
+        f"<div class='tile'><span class='label'>{_esc(label)}</span>"
+        f"<span class='value small'>{value}</span></div>"
+        for label, value in rows
+    )
+    return f"<div class='card'><h2>基本面</h2><div class='tiles'>{cells}</div></div>"
+
+
+def _cell(text: str) -> str:
+    """把格式化結果包好；「資料不足」要看得出來是缺料而不是一個值。"""
+    if text == fmt.MISSING_TEXT:
+        return f"<span class='missing'>{_esc(text)}</span>"
+    return _esc(text)
+
+
 def render_company_dashboard(result: CompanyResult, *, prefix: str = "../") -> str:
     """單一公司的 dashboard：個股查詢與掃描的逐檔頁面共用。
 
@@ -566,6 +641,17 @@ def render_company_dashboard(result: CompanyResult, *, prefix: str = "../") -> s
     add(f"<h1>{_esc(company.name)}<span class='sub'>（{_esc(company.stock_id)}）</span></h1>")
     add(f"<p class='note'>{_esc(result.conclusion)}</p>")
     add("</header>")
+
+    if _is_stage_one(company):
+        add(
+            "<div class='banner'>ℹ️ <strong>這一檔只做了第一階段（企業品質）</strong>："
+            "估值需要股利與資本支出，那些只能逐檔向 FinMind 查詢，"
+            "因此只對品質前段班補齊。下方的安全邊際顯示「資料不足」，"
+            "意思是<strong>還沒算</strong>，<strong>不是估不出來</strong>——"
+            "兩者長得一樣，結論卻相反。</div>"
+        )
+
+    add(_fundamentals_card(company))
 
     add("<div class='tiles'>")
     add(f"<div class='tile'><span class='label'>Buffett Score</span>"
@@ -706,6 +792,49 @@ def write_screen_dashboard(result, repo_root: Path) -> Path:
     return path
 
 
+_SEARCH_JS = """<script>
+(function () {
+  var box = document.getElementById('q');
+  var hit = document.getElementById('hit');
+  var rows = Array.prototype.slice.call(
+    document.getElementById('rows').getElementsByTagName('tr')
+  );
+  function filter() {
+    var q = box.value.trim().toLowerCase();
+    var shown = 0;
+    for (var i = 0; i < rows.length; i++) {
+      var match = !q || rows[i].getAttribute('data-q').toLowerCase().indexOf(q) !== -1;
+      rows[i].style.display = match ? '' : 'none';
+      if (match) shown++;
+    }
+    hit.textContent = q ? (shown + ' 檔符合') : '';
+  }
+  box.addEventListener('input', filter);
+  box.addEventListener('keydown', function (e) {
+    if (e.key !== 'Enter') return;
+    // 完全命中股號就直接開，不用再點一次。
+    var q = box.value.trim();
+    for (var i = 0; i < rows.length; i++) {
+      if (rows[i].style.display === 'none') continue;
+      var link = rows[i].getElementsByTagName('a')[0];
+      var id = rows[i].getAttribute('data-q').split(' ')[0];
+      if (id === q) { location.href = link.getAttribute('href'); return; }
+    }
+    // 沒有完全命中就開唯一的那一筆；多筆時留在原地讓使用者自己挑。
+    var visible = rows.filter(function (r) { return r.style.display !== 'none'; });
+    if (visible.length === 1) {
+      location.href = visible[0].getElementsByTagName('a')[0].getAttribute('href');
+    }
+  });
+})();
+</script>"""
+"""個股清單的過濾器。
+
+刻意做成**過濾既有列**而不是用 JS 產生列表：沒有 JS 的時候整份表格
+照樣列在那裡，只是要自己捲。搜尋是便利品，不是進入頁面的必要條件。
+"""
+
+
 def _render_lookup_index(names: dict[str, str]) -> str:
     """個股頁清單：把已經產生的逐檔頁面列出來。
 
@@ -720,18 +849,25 @@ def _render_lookup_index(names: dict[str, str]) -> str:
         return _page("個股頁面", body, prefix="../", current="lookup")
 
     rows = "".join(
-        f"<tr><td><a href='{_esc(stock_id)}.html'>{_esc(names[stock_id])}</a></td>"
+        f"<tr data-q='{_esc(stock_id)} {_esc(names[stock_id])}'>"
+        f"<td><a href='{_esc(stock_id)}.html'>{_esc(names[stock_id])}</a></td>"
         f"<td>{_esc(stock_id)}</td></tr>"
         for stock_id in sorted(names)
     )
     body = (
         "<header><h1>個股頁面</h1>"
         f"<p class='sub'>目前有 {len(names)} 檔，依股號排序。</p></header>"
-        "<div class='card'><div class='scroll'><table><thead><tr>"
-        "<th>公司</th><th>代號</th></tr></thead><tbody>"
+        "<div class='card'>"
+        "<input id='q' class='search' type='search' autocomplete='off'"
+        " placeholder='輸入股號或公司名（例如 2330、台積電），按 Enter 直接開啟'>"
+        "<p id='hit' class='note'></p>"
+        "<div class='scroll'><table><thead><tr>"
+        "<th>公司</th><th>代號</th></tr></thead><tbody id='rows'>"
         f"{rows}</tbody></table></div></div>"
-        "<p class='note'>清單只涵蓋<strong>已經產生過</strong>的頁面。"
-        "要查沒在上面的股票，用上方「查詢新個股」跑一次 Action。</p>"
+        "<p class='note'>清單涵蓋<strong>已經產生過</strong>的頁面。"
+        f"要查沒在上面的股票（新上市、興櫃），到 <a href='{_esc(LOOKUP_WORKFLOW_URL)}'>"
+        "Actions 的個股查詢</a> 跑一次。</p>"
+        + _SEARCH_JS
     )
     return _page("個股頁面", body, prefix="../", current="lookup")
 
