@@ -76,6 +76,15 @@ tpex:
     income_statement: "/mopsfin_t187ap06_O_ci"
     balance_sheet: "/mopsfin_t187ap07_O_ci"
     daily_price: "/tpex_mainboard_daily_close_quotes"
+    # 本益比／殖利率／股價淨值比。與證交所的 BWIBBU_ALL 對應，
+    # 但**欄位名稱不同**（PriceEarningRatio / YieldRatio / PriceBookRatio），
+    # 見 twse.market_data 的別名清單。
+    #
+    # 探測（2026-08-28，Actions run 33133874411）：櫃買 OpenAPI 規格在
+    # /openapi/swagger.json，共 225 個端點；這一個回 887 筆、156 KB，
+    # 全市場一次給完，符合整批取用的成本模型。
+    # 沒有這一項的期間，所有上櫃公司這三個指標一律標示資料不足。
+    valuation: "/tpex_mainboard_peratio_analysis"
   amount_multiplier: 1000
 
 # ---------------------------------------------------------------------------

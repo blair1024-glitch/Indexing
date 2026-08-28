@@ -10,7 +10,7 @@ on:
       target:
         description: 要探測哪個來源
         type: choice
-        options: [mops, constituents, all]
+        options: [mops, constituents, tpex-valuation, all]
         default: mops
 
 jobs:
@@ -43,3 +43,9 @@ jobs:
       - name: 探測 MOPS 歷史財報
         if: inputs.target == 'mops' || inputs.target == 'all'
         run: python scripts/probe_mops.py
+
+      # 上櫃公司的本益比／淨值比／殖利率目前無來源：證交所有 valuation
+      # 端點，櫃買沒有對應設定。先查清楚有沒有，再決定要不要接。
+      - name: 探測櫃買估值指標端點
+        if: inputs.target == 'tpex-valuation' || inputs.target == 'all'
+        run: python scripts/probe_tpex_valuation.py
