@@ -28,6 +28,14 @@ from .base import FetchError, HttpClient, SchemaWatch, SourceUnavailable, make_p
 
 SOURCE_PREFIX = "TWSE"
 
+_ID_FIELDS = ("Code", "公司代號", "SecuritiesCompanyCode")
+"""行情類端點的股號欄位。
+
+證交所用 ``Code``，櫃買用 ``SecuritiesCompanyCode``。兩邊都列，
+這個 client 才能同時服務上市與上櫃——認不出股號的話，
+整批資料抓回來卻一筆也對不上，而且不會報錯，只會全部標示資料不足。
+"""
+
 
 @dataclass
 class TwseClient:
@@ -231,7 +239,7 @@ class TwseClient:
         today = date.today()
 
         try:
-            valuation = self._fetch_indexed("valuation", id_fields=("Code", "公司代號"))
+            valuation = self._fetch_indexed("valuation", id_fields=_ID_FIELDS)
         except SourceUnavailable:
             valuation = {}
         record = valuation.get(stock_id)
@@ -243,16 +251,26 @@ class TwseClient:
                 url=self._endpoint("valuation"),
                 watch=self.schema_watch,
             )
-            market.pe_ratio = make_point(record, ("PEratio", "本益比"), **common)
-            market.pb_ratio = make_point(record, ("PBratio", "股價淨值比"), **common)
+            # 兩個交易所給同樣的三個指標，欄位名稱卻不同：
+            # 證交所 BWIBBU_ALL 用 PEratio / PBratio / DividendYield，
+            # 櫃買 tpex_mainboard_peratio_analysis 用
+            # PriceEarningRatio / PriceBookRatio / YieldRatio。
+            # 兩邊的別名都列進來，這個 client 才能同時服務上市與上櫃。
+            market.pe_ratio = make_point(
+                record, ("PEratio", "PriceEarningRatio", "本益比"), **common
+            )
+            market.pb_ratio = make_point(
+                record, ("PBratio", "PriceBookRatio", "股價淨值比"), **common
+            )
+            # 兩邊都以百分比表示（櫃買樣本 YieldRatio="11.11"），同樣乘 0.01 轉成比率。
             market.dividend_yield = make_point(
                 record,
-                ("DividendYield", "殖利率(%)", "殖利率"),
+                ("DividendYield", "YieldRatio", "殖利率(%)", "殖利率"),
                 **{**common, "multiplier": 0.01},
             )
 
         try:
-            prices = self._fetch_indexed("daily_price", id_fields=("Code", "公司代號"))
+            prices = self._fetch_indexed("daily_price", id_fields=_ID_FIELDS)
         except SourceUnavailable:
             prices = {}
         price_record = prices.get(stock_id)

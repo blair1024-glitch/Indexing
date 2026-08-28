@@ -309,3 +309,80 @@ class TestConstituentDiff:
 
         empty = ConstituentSet(constituents=[], source="t", as_of=date(2026, 8, 17))
         assert not diff_constituents(empty, None).has_changes
+
+
+class TestBothExchangesGiveTheSameRatios:
+    """本益比／股價淨值比／殖利率：兩個交易所都有，欄位名稱卻不同。
+
+    證交所 BWIBBU_ALL 用 PEratio / PBratio / DividendYield；
+    櫃買 tpex_mainboard_peratio_analysis 用
+    PriceEarningRatio / PriceBookRatio / YieldRatio。
+
+    欄位對不上不會報錯，只會整排標示「資料不足」——所以這裡用**探測到的
+    真實回應**（2026-08-28，Actions run 33133874411，達爾膚 6523）當樣本，
+    不是自己編一組欄位名稱來測自己。
+    """
+
+    TPEX_ROW = {
+        "Date": "1150827",
+        "SecuritiesCompanyCode": "6523",
+        "CompanyName": "達爾膚",
+        "PriceEarningRatio": "13.62",
+        "DividendPerShare": "10.00000000",
+        "YieldRatio": "11.11",
+        "PriceBookRatio": "3.18",
+    }
+    TWSE_ROW = {
+        "Code": "2330",
+        "Name": "台積電",
+        "PEratio": "27.94",
+        "PBratio": "9.72",
+        "DividendYield": "0.93",
+    }
+
+    def _market(self, row: dict, endpoint_key: str = "valuation"):
+        from buffett00929.sources.twse import TwseClient
+
+        client = TwseClient(
+            http=None,  # type: ignore[arg-type] - _fetch_indexed 已被換掉，不會用到
+            config={"enabled": True, "base_url": "https://example.invalid",
+                    "endpoints": {"valuation": "/v", "daily_price": "/d"}},
+        )
+        stock_id = row.get("SecuritiesCompanyCode") or row["Code"]
+
+        def fake_fetch(key: str, id_fields=()):
+            return {stock_id: row} if key == endpoint_key else {}
+
+        client._fetch_indexed = fake_fetch  # type: ignore[method-assign]
+        return client.market_data(stock_id)
+
+    def test_the_over_the_counter_field_names_are_understood(self):
+        market = self._market(self.TPEX_ROW)
+        assert market.pe_ratio.value == pytest.approx(13.62)
+        assert market.pb_ratio.value == pytest.approx(3.18)
+
+    def test_the_listed_field_names_still_work(self):
+        """加別名不能把原本認得的欄位擠掉。"""
+        market = self._market(self.TWSE_ROW)
+        assert market.pe_ratio.value == pytest.approx(27.94)
+        assert market.pb_ratio.value == pytest.approx(9.72)
+
+    def test_yield_is_a_ratio_not_a_percentage_on_both(self):
+        """兩邊都以百分比揭露，存進來要是比率。
+
+        少乘 0.01 的話 11.11% 會變成 1111%，而殖利率法就是拿它估值的。
+        """
+        assert self._market(self.TPEX_ROW).dividend_yield.value == pytest.approx(0.1111)
+        assert self._market(self.TWSE_ROW).dividend_yield.value == pytest.approx(0.0093)
+
+    def test_the_over_the_counter_stock_id_field_is_recognised(self):
+        """櫃買用 SecuritiesCompanyCode。認不出股號的話整批對不上，且不會報錯。"""
+        from buffett00929.sources.twse import _ID_FIELDS
+
+        assert "SecuritiesCompanyCode" in _ID_FIELDS
+        assert "Code" in _ID_FIELDS
+
+    def test_the_shipped_config_gives_both_exchanges_a_valuation_endpoint(self, config):
+        """櫃買原本沒有這一項，所有上櫃公司這三個指標一律資料不足。"""
+        assert config.sources["twse"]["endpoints"].get("valuation")
+        assert config.sources["tpex"]["endpoints"].get("valuation")
