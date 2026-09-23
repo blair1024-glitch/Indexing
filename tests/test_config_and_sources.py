@@ -280,6 +280,135 @@ class TestConstituentResolution:
         assert result.by_id()["5347"].market == "TPEx"
 
 
+class TestManualMirror:
+    """備援名單由官方來源自動回寫，不靠人工維護。
+
+    2026-09-10 的每日更新因為復華 API 連線被切斷而整個中止；
+    備援當時是空的（as_of: null），等於只有單一來源。
+    """
+
+    def _official(self, as_of=None):
+        from buffett00929.sources.constituents import Constituent, ConstituentSet
+
+        return ConstituentSet(
+            constituents=[
+                Constituent(
+                    stock_id="2330",
+                    name="台積電",
+                    weight=DataPoint.of(0.05, "fuhwa"),
+                ),
+                Constituent(
+                    stock_id="5347",
+                    name="世界先進",
+                    market="TPEx",
+                    weight=DataPoint.missing("該檔未揭露權重"),
+                ),
+            ],
+            source="復華投信持股 API",
+            as_of=as_of or date.today(),
+            provider="fuhwa_official",
+        )
+
+    def test_the_mirror_round_trips_through_the_manual_reader(self, config, tmp_path):
+        from buffett00929.sources.constituents import write_manual_mirror
+
+        path = tmp_path / "data" / "manual" / "constituents.yaml"
+        write_manual_mirror(self._official(), path)
+
+        settings = dict(config.sources["constituents"])
+        settings["providers"] = [
+            {"name": "manual", "enabled": True, "path": "data/manual/constituents.yaml"}
+        ]
+        result = ConstituentResolver(
+            http=None, config=settings, repo_root=tmp_path
+        ).resolve()
+
+        assert result.stock_ids == ["2330", "5347"]
+        assert result.by_id()["2330"].weight.value == pytest.approx(0.05)
+        assert result.by_id()["5347"].market == "TPEx"
+
+    def test_as_of_is_written_as_a_date_not_a_string(self, tmp_path):
+        """``_from_manual`` 檢查的是 ``isinstance(as_of, date)``。
+
+        寫成帶引號的字串，``safe_load`` 會回字串，備援於是安靜地失效——
+        症狀和「根本沒有備援」一模一樣，而那正是這次要修的東西。
+        """
+        from buffett00929.sources.constituents import write_manual_mirror
+
+        path = tmp_path / "mirror.yaml"
+        write_manual_mirror(self._official(as_of=date(2026, 9, 11)), path)
+
+        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+        assert isinstance(raw["as_of"], date)
+        assert raw["as_of"] == date(2026, 9, 11)
+
+    def test_a_missing_weight_is_not_written_as_zero(self, tmp_path):
+        """沒抓到權重和權重是零，是兩件事。"""
+        from buffett00929.sources.constituents import write_manual_mirror
+
+        path = tmp_path / "mirror.yaml"
+        write_manual_mirror(self._official(), path)
+
+        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+        entry = next(e for e in raw["constituents"] if e["stock_id"] == "5347")
+        assert "weight" not in entry
+
+    def test_the_mirror_is_never_refreshed_from_itself(self, config, tmp_path):
+        """從 manual 回寫 manual 會把 as_of 刷成今天。
+
+        那樣 manual_max_age_days 的過期保護就永遠不會觸發，系統會安靜地
+        一直用越來越舊的名單——正是這個模組整個在防的事。
+        """
+        from buffett00929.loader import DataLoader
+        from buffett00929.sources.constituents import write_manual_mirror
+
+        path = tmp_path / "data" / "manual" / "constituents.yaml"
+        stale_but_valid = date.today() - timedelta(days=30)
+        write_manual_mirror(self._official(as_of=stale_but_valid), path)
+
+        settings = yaml.safe_load(yaml.safe_dump(config.sources))
+        settings["constituents"]["providers"] = [
+            {"name": "manual", "enabled": True, "path": "data/manual/constituents.yaml"}
+        ]
+        loader = DataLoader(config=_config_with(config, settings), repo_root=tmp_path)
+
+        result = loader.load_constituents()
+        assert result.provider == "manual"
+
+        after = yaml.safe_load(path.read_text(encoding="utf-8"))
+        assert after["as_of"] == stale_but_valid, "備援不該刷新自己的 as_of"
+
+    def test_a_write_failure_does_not_break_the_run(self, config, tmp_path, monkeypatch):
+        """鏡像是便利品，不是資料。名單已經拿到了，寫不進去不該中斷分析。"""
+        from buffett00929 import loader as loader_module
+        from buffett00929.loader import DataLoader
+
+        official = self._official()
+
+        def explode(result, path):
+            raise OSError("唯讀檔案系統")
+
+        monkeypatch.setattr(loader_module, "write_manual_mirror", explode)
+        monkeypatch.setattr(
+            loader_module.ConstituentResolver, "resolve", lambda _self: official
+        )
+
+        loader = DataLoader(config=config, repo_root=tmp_path)
+        result = loader.load_constituents()
+
+        assert result.stock_ids == ["2330", "5347"]
+        assert any("備援名單鏡像未更新" in w for w in loader.warnings)
+
+
+def _config_with(base, sources):
+    """複製一份 Config，換掉 sources。"""
+    import copy
+
+    clone = copy.copy(base)
+    clone.sources = sources
+    return clone
+
+
 class TestConstituentDiff:
     def test_detects_add_remove_and_weight_change(self):
         from buffett00929.sources.constituents import Constituent, ConstituentSet
