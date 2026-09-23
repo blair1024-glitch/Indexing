@@ -104,9 +104,13 @@ jobs:
           # --mixed 讓索引等於遠端，工作目錄裡剛產生的檔案原封不動；
           # 接著只 stage 產出物路徑，其餘檔案維持遠端的內容。
           # 產出物每次執行都是整份重新生成，「最後一次執行說了算」正是正確語意。
+          #
+          # data/manual 是備援名單鏡像：官方來源抓成功時由 loader 回寫。
+          # 不 stage 它的話，鏡像跑完就隨 runner 消失，備援永遠是空的——
+          # 2026-09-10 復華 API 斷線導致整個更新中止，就是因為備援沒東西可用。
           git fetch origin "$BRANCH"
           git reset "origin/$BRANCH"
-          git add data/snapshots docs reports
+          git add data/snapshots docs reports data/manual
 
           if git diff --cached --quiet; then
             echo "本次執行沒有任何變化，不建立 commit。"
@@ -137,7 +141,7 @@ jobs:
             sleep $((attempt * 3))
             git fetch origin "$BRANCH"
             git reset "origin/$BRANCH"
-            git add data/snapshots docs reports
+            git add data/snapshots docs reports data/manual
             if git diff --cached --quiet; then
               echo "重新對齊後已無差異（另一次執行寫入了相同結果）。"
               exit 0

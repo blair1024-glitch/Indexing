@@ -54,6 +54,13 @@ class ConstituentSet:
     source: str
     as_of: date
     fetched_at: datetime = field(default_factory=utcnow)
+    provider: str = ""
+    """勝出的來源名稱（``fuhwa_official`` 或 ``manual``）。
+
+    由 ``resolve`` 填入。呼叫端用它決定要不要回寫備援鏡像——
+    從 ``manual`` 回寫 ``manual`` 會把 as_of 刷成今天，
+    讓過期保護永遠不觸發（見 ``write_manual_mirror``）。
+    """
     attempts: list[str] = field(default_factory=list)
     """依序記錄每個來源的嘗試結果，成功與失敗都留下，方便診斷。"""
 
@@ -117,6 +124,7 @@ class ConstituentResolver:
                 attempts.append(f"{name}：回傳空名單，視為失敗")
                 continue
             result.attempts = attempts + [f"{name}：成功，取得 {len(result)} 檔"]
+            result.provider = str(name)
             return result
 
         raise ConstituentsUnavailable(
@@ -295,6 +303,69 @@ class ConstituentResolver:
             source=f"人工名單 {path.name}（來源註記：{raw.get('source_note', '未填')}）",
             as_of=as_of,
         )
+
+
+# --------------------------------------------------------------------------
+# 備援鏡像
+# --------------------------------------------------------------------------
+
+
+MANUAL_MIRROR_HEADER = """\
+# 00929 成分股｜備援名單
+#
+# **這個檔案是自動維護的**：每次官方來源（復華投信持股 API）抓取成功時，
+# 由 loader.load_constituents 把結果原樣寫回這裡。官方來源斷線時，
+# 解析器就退回這份鏡像，不必等人工填寫。
+#
+# 為什麼需要它：2026-09-10 的每日更新因為復華 API 連線被切斷而整個中止
+# （RemoteDisconnected，重試 3 次）。備援當時是空的，等於只有單一來源。
+#
+# 過期保護仍然有效：超過 sources.yaml 的 manual_max_age_days（預設 45 天）
+# 就會被拒用並中止分析。真的斷線超過 45 天，系統寧可停掉也不會拿
+# 三個月前的名單產生一份看起來很新的 Dashboard。
+#
+# **人工覆寫仍然可行**：想固定某一份名單就直接改這個檔案，格式相同即可
+# （as_of 要在 45 天內）。但下次官方來源抓成功時會被覆蓋回去。
+#
+# 不要手動改 as_of 來「續命」——那等於關掉過期保護。
+"""
+
+
+def write_manual_mirror(result: ConstituentSet, path: Path) -> None:
+    """把官方抓到的名單寫成備援鏡像。
+
+    **只能用官方來源的結果呼叫。** 拿 ``manual`` 自己的結果回寫，
+    會把 ``as_of`` 刷成那份鏡像自己的日期並無限延續下去，
+    ``manual_max_age_days`` 的過期保護就永遠不會觸發——系統會安靜地
+    一直用越來越舊的名單，而那正是這整個模組在防的事。
+    呼叫端（``loader.load_constituents``）負責擋這條路徑。
+    """
+    entries = []
+    for item in result.constituents:
+        entry: dict[str, Any] = {
+            "stock_id": item.stock_id,
+            "name": item.name,
+            "market": item.market,
+        }
+        # 權重缺料就不要寫 0——那會讓「沒抓到權重」看起來像「權重是零」。
+        if item.weight.is_available and item.weight.value is not None:
+            entry["weight"] = round(float(item.weight.value), 6)
+        entries.append(entry)
+
+    payload = {
+        "as_of": result.as_of,
+        "source_note": f"{result.source}（自動鏡像，{utcnow().date().isoformat()} 寫入）",
+        "constituents": entries,
+    }
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # default_flow_style=False 讓 as_of 以原生 YAML 日期寫出（as_of: 2026-09-23）。
+    # 若寫成帶引號的字串，safe_load 會回字串，而 _from_manual 檢查的是
+    # isinstance(as_of, date)——備援會安靜地失效，症狀和「沒有備援」一模一樣。
+    body = yaml.safe_dump(
+        payload, allow_unicode=True, sort_keys=False, default_flow_style=False
+    )
+    path.write_text(MANUAL_MIRROR_HEADER + "\n" + body, encoding="utf-8")
 
 
 # --------------------------------------------------------------------------
