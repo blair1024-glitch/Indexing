@@ -29,7 +29,12 @@ from .normalize import (
 )
 from .sources.base import FetchError, HttpClient, SourceUnavailable
 from .sources.cache import DiskCache
-from .sources.constituents import Constituent, ConstituentResolver, ConstituentSet
+from .sources.constituents import (
+    Constituent,
+    ConstituentResolver,
+    ConstituentSet,
+    write_manual_mirror,
+)
 from .sources.finmind import FinMindClient
 from .sources.mops import MopsClient, MopsHistory
 from .sources.tpex import make_tpex_client
@@ -103,12 +108,40 @@ class DataLoader:
     # ------------------------------------------------------------------
 
     def load_constituents(self) -> ConstituentSet:
+        config = self.config.sources.get("constituents") or {}
         resolver = ConstituentResolver(
             http=self.http,
-            config=self.config.sources.get("constituents") or {},
+            config=config,
             repo_root=self.repo_root,
         )
-        return resolver.resolve()
+        result = resolver.resolve()
+        self._refresh_manual_mirror(result, config)
+        return result
+
+    def _refresh_manual_mirror(self, result: ConstituentSet, config: dict) -> None:
+        """官方名單抓成功時，把它寫回備援鏡像。
+
+        備援因此永遠是一天前的官方資料，不需要任何人維護——
+        2026-09-10 復華 API 斷線時備援是空的，等於只有單一來源。
+        """
+        # 從 manual 回寫 manual 會把 as_of 刷成鏡像自己的日期並無限延續，
+        # manual_max_age_days 的過期保護就永遠不會觸發。
+        if result.provider == "manual":
+            return
+
+        provider = next(
+            (p for p in (config.get("providers") or []) if p.get("name") == "manual"),
+            None,
+        )
+        if provider is None:
+            return
+
+        path = self.repo_root / provider.get("path", "data/manual/constituents.yaml")
+        try:
+            write_manual_mirror(result, path)
+        except OSError as exc:
+            # 鏡像是便利品，不是資料。名單已經拿到了，寫不進去不該中斷這次分析。
+            self.warnings.append(f"備援名單鏡像未更新（不影響本次分析）：{exc}")
 
     # ------------------------------------------------------------------
     # 單一公司
