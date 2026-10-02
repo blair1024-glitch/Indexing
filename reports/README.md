@@ -1,6 +1,6 @@
 # 00929 Buffett Dashboard
 
-**資料日期**：2026-10-01
+**資料日期**：2026-10-02
 
 ## ETF 資訊
 
@@ -400,5 +400,5 @@ _以下項目未能取得資料。系統不會以推估值填補，相關指標�
   - TPEx:tpex_mainboard_peratio_analysis（33 個數據點）
   - TPEx:mopsfin_t187ap05_O（22 個數據點）
   - FinMind:TaiwanStockPrice（11 個數據點）
-- 產生時間：2026-10-01
+- 產生時間：2026-10-02
 
