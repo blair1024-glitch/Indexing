@@ -21,6 +21,15 @@ concurrency:
 jobs:
   analyse:
     runs-on: ubuntu-latest
+    # 不設就吃 GitHub 預設的 6 小時。這條流程幾乎所有時間都花在 MOPS，
+    # 而 MOPS 慢起來是沒有上限的：十年歷史共 90 次請求，實測單次 1.7–15.9 秒，
+    # 任一次不順還會以 max_retries: 3 + timeout_seconds: 90 重試，
+    # 單一個請求最多吃掉 4 分 44 秒。
+    #
+    # 2026-10-07 有一次查詢跑到 45 分鐘還沒結束（正常是 8–9 分），
+    # 當天不砍它就會燒掉六小時額度。45 分鐘留給「快取沒命中、要重抓十年」
+    # 這個最慢的合法情況（約 25 分）加上一點重試餘裕。
+    timeout-minutes: 45
     permissions:
       contents: write
 
@@ -37,13 +46,22 @@ jobs:
       - name: 安裝相依套件
         run: python -m pip install --quiet -e ".[dev]"
 
-      # 只還原不儲存：每日更新那邊會維護快取，這裡蹭現成的就好。
-      # 沒命中也只是慢一點（要重抓十年份彙總報表），不會失敗。
+      # 快取與每日更新共用同一個 mops-history- 前綴；restore-keys 的前綴比對
+      # 會挑到**最新建立**的那一份，所以誰先跑都拿得到最新的歷史。
+      #
+      # 這裡以前是「只還原不儲存」，想蹭每日更新維護好的快取。實際上不夠：
+      # 每日更新排在台灣時間 18:30，白天查幾檔就付幾次全額重抓的代價
+      # ——而且辛苦抓回來的十年歷史跑完就隨 runner 消失，下一檔從頭再來。
+      # 既然已經抓了，就存起來給當天後續的查詢用。
+      #
+      # key 必須是唯一值（帶 run_id）。若用 mops-history- 這種固定字串當
+      # primary key，第二次儲存會因為「Cache already exists」而失敗。
       - name: 還原財報歷史快取
+        id: history-cache
         uses: actions/cache/restore@v4
         with:
           path: data/raw
-          key: mops-history-
+          key: mops-history-${{ github.run_id }}
           restore-keys: |
             mops-history-
 
@@ -54,6 +72,16 @@ jobs:
         run: |
           set -o pipefail
           python -m buffett00929.cli analyse "${{ inputs.stock_id }}" 2>&1 | tee analyse.log
+
+      # 抓到的歷史與後續步驟成敗無關，所以用 if: always()——
+      # 即使分析中途失敗或被 timeout 砍掉，已經抓到的期別也要留下來，
+      # 下一次查詢才不必從零開始。理由同 daily-update.yml 的拆分說明。
+      - name: 保存財報歷史快取
+        if: always() && steps.history-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: data/raw
+          key: mops-history-${{ github.run_id }}
 
       # 摘要直接放進 job summary，不必點進 log 翻。
       - name: 寫入執行摘要
