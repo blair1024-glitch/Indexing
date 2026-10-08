@@ -116,7 +116,7 @@ def _leaderboard_row(index: int, result: CompanyResult) -> str:
         f"| {fmt.pct(result.company.etf_weight, 2)} "
         f"| {score.total_score:.1f} | {score.grade[0]} "
         f"| {fmt.pct(roe)}{leverage_mark} | {score.moat_grade} "
-        f"| {fmt.pct(score.valuation.margin_of_safety, 0)} | {result.verdict} |"
+        f"| {fmt.margin_of_safety(score.valuation.margin_of_safety, 0)} | {result.verdict} |"
     )
 
 
@@ -406,7 +406,7 @@ def _company_valuation(add, result: CompanyResult) -> None:
     add("| --- | --: |")
     add(f"| 內在價值（中位數）| {fmt.num(valuation.intrinsic_value, 1, ' 元')} |")
     add(f"| 目前股價 | {fmt.num(valuation.price, 1, ' 元')} |")
-    add(f"| **安全邊際** | **{fmt.pct(valuation.margin_of_safety, 1)}** |")
+    add(f"| **安全邊際** | **{fmt.margin_of_safety(valuation.margin_of_safety, 1)}** |")
     add("")
 
 
@@ -542,7 +542,7 @@ def render_screen(result: "ScreenResult") -> str:
             mos = r.score.valuation.margin_of_safety
             add(f"| {i} | {r.company.name} | {r.company.stock_id} | "
                 f"{r.score.total_score:.1f} | {r.score.grade[0]} | "
-                f"{mos.value:+.1%} | {r.seven_year} |")
+                f"{fmt.margin_of_safety(mos)} | {r.seven_year} |")
     else:
         add(f"這 {stage_two} 家補齊估值的公司中，沒有同時滿足"
             "「總分達標、安全邊際達標、無重大紅旗、財務安全達標」四項條件的標的。")
@@ -558,7 +558,7 @@ def render_screen(result: "ScreenResult") -> str:
             mos = r.score.valuation.margin_of_safety
             add(f"| {i} | {r.company.name} | {r.company.stock_id} | "
                 f"{r.score.total_score:.1f} | {r.score.grade[0]} | "
-                f"{mos.value:+.1%} | {r.verdict} |")
+                f"{fmt.margin_of_safety(mos)} | {r.verdict} |")
         unmeasured = stage_two - len(with_mos)
         if unmeasured:
             add("")
