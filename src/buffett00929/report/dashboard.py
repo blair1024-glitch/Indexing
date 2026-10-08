@@ -387,7 +387,7 @@ def _mos_cell(point) -> str:
     if not point.is_available or point.value is None:
         return f"<span class='missing'>{fmt.MISSING_TEXT}</span>"
     css = "good" if point.value >= 0.20 else ("warn" if point.value >= 0 else "bad")
-    return f"<span class='{css}'>{point.value:.0%}</span>"
+    return f"<span class='{css}'>{_esc(fmt.margin_of_safety(point, 0))}</span>"
 
 
 def _yield_traps(run: AnalysisRun) -> str:
