@@ -11,8 +11,15 @@ from datetime import date
 import pytest
 
 from buffett00929.models import FiscalPeriod
-from buffett00929.sources.base import HttpClient
-from buffett00929.sources.mops import MopsClient, MopsHistory, scan_rows
+from buffett00929.sources.base import FetchError, HttpClient
+from buffett00929.sources.mops import (
+    MARKETS,
+    REPORTS,
+    MopsClient,
+    MopsHistory,
+    scan_rows,
+)
+from buffett00929.sources.periods import periods_to_fetch
 
 # 版面依實測（2026-08-17）：表格**巢狀**、一頁 6 種業別表頭、
 # 欄名一律用**全形括號**、業別之間用詞不一致（資產總計／資產總額）。
@@ -619,3 +626,76 @@ class TestCompanyNames:
         history.add("balance", client.parse_balance(BALANCE_WITH_CAPITAL, Q1, TODAY))
         history.names.update(client.company_names)
         assert history.names["2330"] == "台積電"
+
+
+class TestBackfillProgress:
+    """回補是整套系統最慢的一段，進度要邊跑邊回報。
+
+    2026-10-07 有一次個股查詢在這裡卡了 50 分鐘，log 連一行輸出都沒有，
+    事後完全分不出「在慢慢跑」和「卡死了」。這組測試釘住的就是那件事。
+    """
+
+    def _stub(self, client, monkeypatch, *, fail_on=None):
+        """讓 fetch_report 不碰網路，並記下每次請求當下已經印出的進度。"""
+        seen: list[list[str]] = []
+        sent: list[str] = []
+        client.progress = sent.append
+
+        def fake_fetch(code, market, period, *, today):
+            seen.append(list(sent))
+            if fail_on is not None and len(seen) == fail_on:
+                raise FetchError("連線被切斷")
+            return BALANCE_WITH_CAPITAL
+
+        monkeypatch.setattr(client, "fetch_report", fake_fetch)
+        monkeypatch.setattr(client, "reconcile_share_counts", lambda history: None)
+        return sent, seen
+
+    def _total(self, client):
+        periods = periods_to_fetch(TODAY, years=client.years)
+        return len(periods) * len(MARKETS) * len(REPORTS)
+
+    def test_each_request_is_announced_before_it_is_sent(self, client, monkeypatch):
+        """**印在請求之後的話，卡住的那一次就不留痕跡**——而那是唯一需要看到的一行。
+
+        所以斷言的不是「有印」，而是「第 n 次請求發出的當下，第 n 行已經印出去了」。
+        """
+        sent, seen = self._stub(client, monkeypatch)
+        total = self._total(client)
+
+        client.backfill(TODAY)
+
+        assert len(seen) == total
+        for n, before in enumerate(seen, start=1):
+            assert any(f"({n}/{total})" in line for line in before), (
+                f"第 {n} 次請求發出時，它自己的進度行還沒印出來"
+            )
+
+    def test_progress_counts_up_to_the_total(self, client, monkeypatch):
+        sent, _seen = self._stub(client, monkeypatch)
+        total = self._total(client)
+
+        client.backfill(TODAY)
+
+        assert any(f"{total} 次請求" in line for line in sent)
+        assert any(f"({total}/{total})" in line for line in sent)
+
+    def test_a_failed_request_is_reported_and_the_backfill_continues(
+        self, client, monkeypatch
+    ):
+        sent, seen = self._stub(client, monkeypatch, fail_on=2)
+        total = self._total(client)
+
+        client.backfill(TODAY)
+
+        assert any("失敗" in line and "連線被切斷" in line for line in sent)
+        # 失敗不中斷：剩下的期別照抓。
+        assert len(seen) == total
+        assert any("未取得" in w for w in client.warnings)
+
+    def test_no_progress_sink_means_silence_not_a_crash(self, client, monkeypatch):
+        """``sources/`` 全層都不做輸出。沒設 progress 就該完全安靜。"""
+        _sent, _seen = self._stub(client, monkeypatch)
+        client.progress = None
+
+        client.backfill(TODAY)  # 不應拋錯

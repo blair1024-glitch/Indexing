@@ -16,6 +16,18 @@ from pathlib import Path
 from .config import Config, ConfigError, REPO_ROOT
 
 
+def _progress(message: str) -> None:
+    """把長時間作業的進度印到 stderr。
+
+    走 stderr 而不是 stdout：stdout 是給結果用的，進度是診斷。
+    GitHub Actions 那邊是 ``2>&1 | tee``，兩者都會進 log。
+
+    ``flush=True`` 不可省。stderr 在導向管線時會變成有緩衝的，
+    不 flush 的話進度會整批卡在緩衝區裡，等行程結束才一次吐出——
+    那恰好是最需要它的時候（卡住、被 timeout 砍掉）唯一看不到的情況。"""
+    print(message, file=sys.stderr, flush=True)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="buffett00929",
@@ -75,7 +87,7 @@ def _cmd_screen(config: Config, args) -> int:
     from .sources.constituents import ConstituentSet
 
     repo_root: Path = args.repo_root
-    result = screen_market(config, repo_root, top_n=args.top)
+    result = screen_market(config, repo_root, top_n=args.top, progress=_progress)
 
     if not result.quality_ranked:
         print("\n彙總報表沒有回傳任何公司，掃描中止。\n", file=sys.stderr)
@@ -144,7 +156,7 @@ def _cmd_analyse(config: Config, args) -> int:
         return 2
 
     try:
-        result, run = analyse_stock(stock_id, config, repo_root)
+        result, run = analyse_stock(stock_id, config, repo_root, progress=_progress)
     except SourceUnavailable as exc:
         print(f"\n資料來源不可用，無法分析 {stock_id}：\n\n{exc}\n", file=sys.stderr)
         return 3
@@ -192,7 +204,7 @@ def _cmd_update(config: Config, args) -> int:
 
     repo_root: Path = args.repo_root
     try:
-        run = run_analysis(config, repo_root)
+        run = run_analysis(config, repo_root, progress=_progress)
     except ConstituentsUnavailable as exc:
         # 成分股名單是整個分析的前提，拿不到就中止——不用過期名單充數。
         print(f"\n無法取得成分股名單，已中止分析：\n\n{exc}\n", file=sys.stderr)

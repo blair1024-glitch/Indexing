@@ -13,6 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
+from typing import Callable
 
 from .config import Config
 from .loader import DataLoader, LoadedCompany
@@ -321,6 +322,7 @@ def analyse_stock(
     repo_root: Path,
     *,
     today: date | None = None,
+    progress: Callable[[str], None] | None = None,
 ) -> tuple[CompanyResult, AnalysisRun]:
     """對任意上市櫃股號跑一次完整的巴菲特分析（需要網路）。
 
@@ -335,7 +337,7 @@ def analyse_stock(
     from .sources.constituents import ConstituentSet
 
     today = today or date.today()
-    loader = DataLoader(config=config, repo_root=repo_root)
+    loader = DataLoader(config=config, repo_root=repo_root, progress=progress)
 
     constituent = build_lookup_constituent(stock_id)
     single = ConstituentSet(
@@ -370,10 +372,11 @@ def run_analysis(
     repo_root: Path,
     *,
     today: date | None = None,
+    progress: Callable[[str], None] | None = None,
 ) -> AnalysisRun:
     """完整執行一次分析（需要網路可連線至資料來源）。"""
     today = today or date.today()
-    loader = DataLoader(config=config, repo_root=repo_root)
+    loader = DataLoader(config=config, repo_root=repo_root, progress=progress)
 
     # 成分股拿不到就直接中止——不用過期名單產生看起來很新的報表。
     constituents = loader.load_constituents()
