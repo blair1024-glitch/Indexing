@@ -16,6 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
+from typing import Callable
 
 from .config import Config
 from .models import STAGE_ONE_GAP, Company, DataPoint, MarketData
@@ -63,6 +64,10 @@ class DataLoader:
     history: MopsHistory | None = field(default=None, init=False)
     """MOPS 全市場歷史索引。整批抓一次，所有公司共用。"""
     warnings: list[str] = field(default_factory=list)
+    progress: Callable[[str], None] | None = None
+    """MOPS 回補的進度去處，轉交給 ``MopsClient.progress``（見那裡的說明）。
+
+    ``None`` 表示安靜——測試與程式庫用法不該因為載入資料就產生輸出。"""
     _directory: dict[str, dict[str, str]] | None = field(default=None, init=False)
     """FinMind 全市場總覽（代號 → 產業別、市場別）。一次請求涵蓋整個市場。"""
     _directory_tried: bool = field(default=False, init=False)
@@ -101,6 +106,7 @@ class DataLoader:
                 min_interval_seconds=float(mops_cfg.get("min_interval_seconds", 1.0)),
             ),
             config=mops_cfg,
+            progress=self.progress,
         )
 
     # ------------------------------------------------------------------

@@ -43,10 +43,11 @@
 from __future__ import annotations
 
 import re
+import time
 from dataclasses import dataclass, field
 from datetime import date
 from html import unescape
-from typing import Iterable
+from typing import Callable, Iterable
 
 from ..models import (
     BalanceSheet,
@@ -285,6 +286,18 @@ class MopsClient:
     任何驗算。8070／6548 的 DCF 因此用了一個沒人驗過的股數。所以退件本身
     必須留下痕跡，讓下一次執行看得到是哪幾檔、差多少。
     """
+    progress: Callable[[str], None] | None = None
+    """回補進度的去處。``None``（預設）表示不回報。
+
+    ``warnings`` 是跑完才讀的，對「現在跑到哪」沒有幫助。而回補是這整套系統
+    最慢的一段：90 次請求（15 期別 × 2 市場 × 3 報表），單次實測 1.7–15.9 秒，
+    任一次不順還會以 ``max_retries`` 重試，單一個請求最多吃掉 4 分 44 秒。
+
+    2026-10-07 有一次個股查詢在這裡卡了 50 分鐘，log 連一行輸出都沒有，
+    事後完全分不出「在慢慢跑」和「卡死了」。所以進度要邊跑邊回報。
+
+    這一層不直接 print——``sources/`` 全層都不做輸出，診斷一律往上傳。
+    由 CLI 決定要不要印、印到哪裡。"""
 
     @property
     def base_url(self) -> str:
@@ -300,6 +313,11 @@ class MopsClient:
 
     def _url(self, code: str) -> str:
         return f"{self.base_url}/mops/web/ajax_{code}"
+
+    def _report(self, message: str) -> None:
+        """把進度交給 ``progress``；沒設就什麼都不做。"""
+        if self.progress is not None:
+            self.progress(message)
 
     def fetch_report(
         self, code: str, market: str, period: FiscalPeriod, *, today: date
@@ -527,12 +545,26 @@ class MopsClient:
         history = MopsHistory()
         periods = periods_to_fetch(today, years=self.years)
 
+        total = len(periods) * len(MARKETS) * len(REPORTS)
+        done = 0
+        started = time.monotonic()
+        self._report(
+            f"MOPS 回補開始：{len(periods)} 期別 × {len(MARKETS)} 市場 "
+            f"× {len(REPORTS)} 報表 = {total} 次請求（已快取的期別不會重抓）"
+        )
+
         for period in periods:
             for market in MARKETS.values():
                 for kind, (code, label) in REPORTS.items():
+                    done += 1
+                    # **在請求之前**回報。印在之後的話，卡住的那一次就不會留下
+                    # 任何痕跡——而那正是唯一需要看到的一行。
+                    self._report(f"  ({done}/{total}) {label} {period} {market}")
+                    at = time.monotonic()
                     try:
                         html = self.fetch_report(code, market, period, today=today)
                     except (FetchError, SourceUnavailable) as exc:
+                        self._report(f"    ↳ 失敗（{time.monotonic() - at:.1f} 秒）：{exc}")
                         self.warnings.append(
                             f"MOPS {label} {period} {market} 未取得：{exc}"
                         )
@@ -543,12 +575,17 @@ class MopsClient:
                         "cashflow": self.parse_cashflow,
                     }[kind]
                     parsed = parser(html, period, as_of=today)
+                    self._report(
+                        f"    ↳ {time.monotonic() - at:.1f} 秒、{len(parsed)} 家"
+                    )
                     if not parsed:
                         self.warnings.append(
                             f"MOPS {label} {period} {market} 解析不到任何公司"
                             "（版面可能已變更）"
                         )
                     history.add(kind, parsed)
+
+        self._report(f"MOPS 回補完成：{total} 次請求，共 {time.monotonic() - started:.1f} 秒")
 
         history.names.update(self.company_names)
         self.reconcile_share_counts(history)

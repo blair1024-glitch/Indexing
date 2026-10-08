@@ -23,6 +23,10 @@ concurrency:
 jobs:
   update:
     runs-on: ubuntu-latest
+    # 不設就吃 GitHub 預設的 6 小時。實測「更新分析」在 MOPS 順暢時 6–8 分鐘，
+    # 2026-10-06（九月營收與 Q3 財報集中申報期）慢到 21 分 44 秒。
+    # 60 分鐘給得比最慢的實測值寬鬆兩倍以上，但遠離預設的六小時。
+    timeout-minutes: 60
     permissions:
       contents: write
 

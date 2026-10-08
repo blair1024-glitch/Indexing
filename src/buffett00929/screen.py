@@ -30,6 +30,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
+from typing import Callable
 
 from .config import Config
 from .loader import DataLoader, build_lookup_constituent
@@ -152,13 +153,14 @@ def screen_market(
     *,
     today: date | None = None,
     top_n: int | None = None,
+    progress: Callable[[str], None] | None = None,
 ) -> ScreenResult:
     """兩段式全市場掃描（需要網路）。"""
     today = today or date.today()
     settings = config.sources.get("screen") or {}
     top_n = top_n or int(settings.get("top_n", 50))
 
-    loader = DataLoader(config=config, repo_root=repo_root)
+    loader = DataLoader(config=config, repo_root=repo_root, progress=progress)
     loader.prefetch_history(today)
 
     ranked = rank_by_quality(loader, config, today=today, repo_root=repo_root)
