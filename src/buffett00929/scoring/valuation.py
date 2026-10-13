@@ -313,6 +313,11 @@ def _method_dividend_yield(company: Company, config: dict) -> ValuationMethod:
     )
 
 
+def _fcf_series(points: list) -> str:
+    """把基期用到的各年 FCF 攤成「79.0／141.3／-54.7 億」。"""
+    return "／".join(f"{p.value / 1e8:.1f}" for p in points) + " 億"
+
+
 def _method_dcf(company: Company, config: dict) -> ValuationMethod:
     """自由現金流折現。"""
     dcf_config = config.get("dcf") or {}
@@ -382,7 +387,13 @@ def _method_dcf(company: Company, config: dict) -> ValuationMethod:
         label="自由現金流折現（DCF）",
         value_per_share=DataPoint.derived(present_value / shares.value, inputs=[*recent, shares]),
         assumptions=(
-            f"基期 FCF {base_fcf / 1e8:.1f} 億元、成長 {growth:.1%}／年（{years} 年）、"
+            # 基期是近三年平均，所以它可以和「最新年度 FCF 轉負」的紅旗差出
+            # 上百億而兩者都沒錯。臻鼎-KY（4958）就是這樣：基期 +55.2 億，
+            # 紅旗寫 -54.7 億，兩個數字並列在同一份報表裡卻沒有任何交代，
+            # 讀的人只會以為其中一個算錯了。把各年攤開來，它自己就說得清。
+            f"基期 FCF {base_fcf / 1e8:.1f} 億元"
+            f"（近 {len(recent)} 年平均，各年 {_fcf_series(recent)}）、"
+            f"成長 {growth:.1%}／年（{years} 年）、"
             f"折現率 {discount:.1%}、永續成長 {terminal_growth:.1%}、"
             f"股數 {shares.value / 1e8:.2f} 億股（{share_period}）"
         ),

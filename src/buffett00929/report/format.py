@@ -54,6 +54,33 @@ def multiple(point: DataPoint, digits: int = 2) -> str:
     return num(point, digits, suffix="x")
 
 
+def margin_of_safety(point: DataPoint, digits: int = 1) -> str:
+    """安全邊際 → 人讀得懂的字串。
+
+    定義是（內在價值 − 股價）／內在價值。**正值那側直接顯示百分比沒有問題**：
+    它天然落在 0–100%，而且 scoring.yaml 的級距（>30% 非常便宜 … 0~10% 合理）
+    全都在那一側。
+
+    負值那側不行。它沒有上界，而且隨內在價值縮小而放大——臻鼎-KY（4958）
+    內在價值 76.6 元對上股價 574 元，算出來是 **-648.9%**。那個數字唯一的
+    意思是「股價是內在價值的 7.5 倍」；而所有負值一律 0 分，magnitude
+    對評分毫無作用，只會讓讀者以為自己看懂了什麼。所以負值改講倍數。
+
+    **刻意不換成「除以股價」的百分比**（4958 會是 -86.6%）。那樣同一欄裡
+    正負值的分母不同，看起來可比而其實不可比，比現在更難察覺。
+    倍數換了單位，讀者一眼就知道它跟上面那些百分比不是同一種東西。
+
+    底下那張逐項評分表仍然顯示原始值（-6.489）——它的欄名就寫著公式，
+    是稽核軌跡，必須忠於定義。
+    """
+    if not point.is_available or point.value is None:
+        return MISSING_TEXT
+    if point.value >= 0:
+        return f"{point.value:+.{digits}%}"
+    # mos = 1 − 股價／內在價值，所以 股價／內在價值 = 1 − mos。
+    return f"股價 {1 - point.value:,.1f}× 估值"
+
+
 def score_text(value: float | None, digits: int = 1) -> str:
     if value is None:
         return MISSING_TEXT

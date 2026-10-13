@@ -519,3 +519,82 @@ class TestZeroIsNotAPrice:
         """股價有問題不該讓估值本身消失——內在價值仍然算得出來。"""
         result = self._valuation(0.0)
         assert result.intrinsic_value.is_available
+
+
+class TestNegativeMarginOfSafetyIsReadable:
+    """安全邊際為負時，百分比沒有上界，數字大小不帶資訊。
+
+    臻鼎-KY（4958）2026-10-08：內在價值 76.6 元、股價 574 元
+    →（76.6−574）÷ 76.6 = **-648.9%**。那個數字唯一的意思是
+    「股價是內在價值的 7.5 倍」，而所有負值一律 0 分，magnitude
+    對評分毫無作用——只會讓讀者以為自己看懂了什麼。
+    """
+
+    def _point(self, value):
+        from buffett00929.models import DataPoint
+
+        return DataPoint.of(value, "測試")
+
+    def test_a_positive_margin_is_still_shown_as_a_percentage(self):
+        """正值那側本來就落在 0–100%，級距也都在那裡，不該動它。"""
+        from buffett00929.report import format as fmt
+
+        assert fmt.margin_of_safety(self._point(0.123)) == "+12.3%"
+        assert fmt.margin_of_safety(self._point(0.0)) == "+0.0%"
+
+    def test_a_negative_margin_is_shown_as_a_multiple_of_the_estimate(self):
+        from buffett00929.report import format as fmt
+
+        # 4958 的實際數字。
+        assert fmt.margin_of_safety(self._point(-6.489)) == "股價 7.5× 估值"
+
+    def test_the_exploding_percentage_never_reaches_the_reader(self):
+        """這條是重點：-648.9% 這種字串不該出現在任何給人看的欄位裡。"""
+        from buffett00929.report import format as fmt
+
+        text = fmt.margin_of_safety(self._point(-6.489))
+        assert "648" not in text
+        assert "%" not in text
+
+    def test_a_missing_margin_still_says_so(self):
+        from buffett00929.models import DataPoint
+        from buffett00929.report import format as fmt
+
+        assert fmt.margin_of_safety(DataPoint.missing("缺股價")) == fmt.MISSING_TEXT
+
+    def test_the_multiple_grows_with_the_overvaluation(self):
+        """單調性：越高估，倍數越大。讀者靠這個排序。"""
+        from buffett00929.report import format as fmt
+
+        assert fmt.margin_of_safety(self._point(-0.5)) == "股價 1.5× 估值"
+        assert fmt.margin_of_safety(self._point(-1.0)) == "股價 2.0× 估值"
+        assert fmt.margin_of_safety(self._point(-9.0)) == "股價 10.0× 估值"
+
+
+class TestDcfBaseReconcilesWithTheLatestYear:
+    """基期是近三年平均，所以它可以和「最新年度 FCF 轉負」的紅旗差出上百億
+    而兩者都沒錯。臻鼎-KY（4958）就是這樣：基期 +55.2 億、紅旗 -54.7 億，
+    兩個數字並列在同一份報表裡卻沒有任何交代。
+    """
+
+    def test_the_assumption_text_shows_each_year(self):
+        from buffett00929.config import Config
+
+        company = demo.build_company()
+        result = valuation_module.estimate_valuation(company, Config.load().scoring)
+        dcf = next((m for m in result.methods if m.key == "dcf"), None)
+        assert dcf is not None
+        assert "近" in dcf.assumptions and "年平均" in dcf.assumptions
+        # 各年攤開，而不是只給一個平均值。
+        assert "各年" in dcf.assumptions
+        assert dcf.assumptions.count("／") >= 1
+
+    def test_the_series_formatter_keeps_negative_years_visible(self):
+        from buffett00929.models import DataPoint
+
+        points = [
+            DataPoint.of(79.0e8, "測試"),
+            DataPoint.of(141.3e8, "測試"),
+            DataPoint.of(-54.7e8, "測試"),
+        ]
+        assert valuation_module._fcf_series(points) == "79.0／141.3／-54.7 億"

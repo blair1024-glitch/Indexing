@@ -81,6 +81,7 @@ def main(argv: list[str] | None = None) -> int:
 
 def _cmd_screen(config: Config, args) -> int:
     """全市場掃描。第一階段不花 FinMind 額度，第二階段只補前 N 名。"""
+    from .report import format as fmt
     from .report.dashboard import write_company_dashboards, write_screen_dashboard
     from .report.markdown import render_company, render_screen
     from .screen import screen_market
@@ -122,7 +123,7 @@ def _cmd_screen(config: Config, args) -> int:
         for r in candidates:
             mos = r.score.valuation.margin_of_safety
             print(f"  {r.company.name}（{r.company.stock_id}）"
-                  f"總分 {r.score.total_score:.1f}　安全邊際 {mos.value:+.1%}")
+                  f"總分 {r.score.total_score:.1f}　安全邊際 {fmt.margin_of_safety(mos)}")
     else:
         print(f"\n這 {len(result.valued)} 家中沒有 BUY 候選"
               "（注意：不等於全市場沒有——第二階段只涵蓋品質前段班）")
@@ -145,6 +146,7 @@ def _cmd_screen(config: Config, args) -> int:
 def _cmd_analyse(config: Config, args) -> int:
     """單檔查詢。與每日更新走同一條流程、同一套門檻。"""
     from .pipeline import analyse_stock
+    from .report import format as fmt
     from .report.dashboard import write_company_dashboards
     from .report.markdown import render_company
     from .sources.base import SourceUnavailable
@@ -180,7 +182,7 @@ def _cmd_analyse(config: Config, args) -> int:
     print(f"  Buffett Score  {score.total_score:.1f} / {score.scorable_max:.0f} 可評分"
           f"　等級 {score.grade}")
     mos = score.valuation.margin_of_safety
-    print(f"  安全邊際       {mos.value:+.1%}" if mos.is_available
+    print(f"  安全邊際       {fmt.margin_of_safety(mos)}" if mos.is_available
           else f"  安全邊際       資料不足（{mos.unavailable_reason}）")
     print(f"  投資判斷       {result.verdict}")
     print(f"    理由：{result.verdict_reason}")
