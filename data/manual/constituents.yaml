@@ -16,202 +16,202 @@
 #
 # 不要手動改 as_of 來「續命」——那等於關掉過期保護。
 
-as_of: 2026-10-22
-source_note: 復華投信官方持股 API（fundID=ETF21），追蹤指數：臺灣指數公司特選臺灣上市上櫃科技優息指數（自動鏡像，2026-10-26
+as_of: 2026-10-27
+source_note: 復華投信官方持股 API（fundID=ETF21），追蹤指數：臺灣指數公司特選臺灣上市上櫃科技優息指數（自動鏡像，2026-10-27
   寫入）
 constituents:
 - stock_id: '3034'
   name: 聯詠科技
   market: TWSE
-  weight: 0.04136
+  weight: 0.04203
 - stock_id: '2357'
   name: 華碩電腦
   market: TWSE
-  weight: 0.03966
+  weight: 0.0401
 - stock_id: '3045'
   name: 台灣大哥
   market: TWSE
-  weight: 0.03365
+  weight: 0.03396
 - stock_id: '2347'
   name: 聯強國際
   market: TWSE
-  weight: 0.03324
+  weight: 0.03377
 - stock_id: '2379'
   name: 瑞昱半導
   market: TWSE
-  weight: 0.0325
-- stock_id: '2412'
-  name: 中華電信
-  market: TWSE
-  weight: 0.0294
+  weight: 0.03301
 - stock_id: '2474'
   name: 可成科技
   market: TWSE
-  weight: 0.02894
+  weight: 0.02943
+- stock_id: '2412'
+  name: 中華電信
+  market: TWSE
+  weight: 0.02934
 - stock_id: '4904'
   name: 遠傳電信
   market: TWSE
-  weight: 0.0284
-- stock_id: '3231'
-  name: 緯創資通
-  market: TWSE
-  weight: 0.02715
+  weight: 0.0281
 - stock_id: '2382'
   name: 廣達電腦
   market: TWSE
-  weight: 0.02702
-- stock_id: '6278'
-  name: 台灣表面
+  weight: 0.02718
+- stock_id: '3231'
+  name: 緯創資通
   market: TWSE
-  weight: 0.02538
+  weight: 0.02705
 - stock_id: '3702'
   name: 大聯大控
   market: TWSE
-  weight: 0.02519
+  weight: 0.02535
 - stock_id: '5434'
   name: 崇越科技
   market: TWSE
-  weight: 0.02518
+  weight: 0.02472
 - stock_id: '2377'
   name: 微星科技
   market: TWSE
-  weight: 0.02438
-- stock_id: '3008'
-  name: 大立光電
-  market: TWSE
-  weight: 0.02358
+  weight: 0.02455
 - stock_id: '6409'
   name: 旭隼科技
   market: TWSE
-  weight: 0.02313
+  weight: 0.02411
+- stock_id: '6278'
+  name: 台灣表面
+  market: TWSE
+  weight: 0.02407
+- stock_id: '3008'
+  name: 大立光電
+  market: TWSE
+  weight: 0.02336
 - stock_id: '2376'
   name: 技嘉科技
   market: TWSE
-  weight: 0.02265
+  weight: 0.02295
 - stock_id: '3260'
   name: 威剛科技
   market: TWSE
-  weight: 0.02253
-- stock_id: '2404'
-  name: 漢唐集成
-  market: TWSE
-  weight: 0.02187
-- stock_id: '3706'
-  name: 神達控股
-  market: TWSE
-  weight: 0.02184
+  weight: 0.02246
 - stock_id: '5269'
   name: 祥碩科技
   market: TWSE
-  weight: 0.02169
-- stock_id: '6691'
-  name: 洋基工程
+  weight: 0.02189
+- stock_id: '3706'
+  name: 神達控股
   market: TWSE
-  weight: 0.02008
-- stock_id: '5483'
-  name: 中美矽晶
+  weight: 0.02158
+- stock_id: '2404'
+  name: 漢唐集成
   market: TWSE
-  weight: 0.02002
+  weight: 0.02153
 - stock_id: '5347'
   name: 世界先進
   market: TWSE
-  weight: 0.01984
+  weight: 0.02018
+- stock_id: '5483'
+  name: 中美矽晶
+  market: TWSE
+  weight: 0.01964
+- stock_id: '6691'
+  name: 洋基工程
+  market: TWSE
+  weight: 0.01941
 - stock_id: '3044'
   name: 健鼎科技
   market: TWSE
-  weight: 0.01913
-- stock_id: '3023'
-  name: 信邦電子
-  market: TWSE
-  weight: 0.01866
+  weight: 0.0186
 - stock_id: '6139'
   name: 亞翔工程
   market: TWSE
-  weight: 0.01796
-- stock_id: '6257'
-  name: 矽格股份
+  weight: 0.0181
+- stock_id: '3023'
+  name: 信邦電子
   market: TWSE
-  weight: 0.01624
-- stock_id: '3264'
-  name: 欣銓科技
-  market: TWSE
-  weight: 0.01601
+  weight: 0.01807
 - stock_id: '2356'
   name: 英業達股
   market: TWSE
-  weight: 0.01582
+  weight: 0.01669
+- stock_id: '6257'
+  name: 矽格股份
+  market: TWSE
+  weight: 0.01606
+- stock_id: '3264'
+  name: 欣銓科技
+  market: TWSE
+  weight: 0.01593
 - stock_id: '2317'
   name: 鴻海精密
   market: TWSE
-  weight: 0.01549
+  weight: 0.01548
 - stock_id: '8069'
   name: 元太科技
   market: TWSE
-  weight: 0.0152
+  weight: 0.01537
 - stock_id: '6121'
   name: 新普科技
   market: TWSE
-  weight: 0.01462
-- stock_id: '2303'
-  name: 聯華電子
-  market: TWSE
-  weight: 0.01458
+  weight: 0.01489
 - stock_id: '3211'
   name: 順達科技
   market: TWSE
-  weight: 0.01415
+  weight: 0.0143
+- stock_id: '2303'
+  name: 聯華電子
+  market: TWSE
+  weight: 0.01407
 - stock_id: '8112'
   name: 至上電子
   market: TWSE
-  weight: 0.01383
+  weight: 0.01368
 - stock_id: '6191'
   name: 精成科技
   market: TWSE
-  weight: 0.01319
+  weight: 0.01274
 - stock_id: '2301'
   name: 光寶科技
   market: TWSE
-  weight: 0.01266
+  weight: 0.01269
 - stock_id: '4966'
   name: 譜瑞-KY
   market: TWSE
-  weight: 0.01238
+  weight: 0.01249
 - stock_id: '2458'
   name: 義隆電子
   market: TWSE
-  weight: 0.01236
+  weight: 0.01237
 - stock_id: '6548'
   name: 長華科技
   market: TWSE
-  weight: 0.01013
+  weight: 0.00992
 - stock_id: '3563'
   name: 牧德科技
   market: TWSE
-  weight: 0.00986
+  weight: 0.00965
 - stock_id: '3090'
   name: 日電貿股
   market: TWSE
-  weight: 0.00979
+  weight: 0.00947
 - stock_id: '2352'
   name: 佳世達科
   market: TWSE
-  weight: 0.00917
-- stock_id: '5469'
-  name: 瀚宇博德
-  market: TWSE
-  weight: 0.00879
+  weight: 0.00942
 - stock_id: '8422'
   name: 可寧衛股
   market: TWSE
-  weight: 0.00874
+  weight: 0.00848
+- stock_id: '5469'
+  name: 瀚宇博德
+  market: TWSE
+  weight: 0.00838
 - stock_id: '5536'
   name: 聖暉工程
   market: TWSE
-  weight: 0.00842
+  weight: 0.00794
 - stock_id: '4915'
   name: 致伸科技
   market: TWSE
-  weight: 0.0077
+  weight: 0.00773
 - stock_id: '3227'
   name: 原相科技
   market: TWSE
@@ -219,4 +219,4 @@ constituents:
 - stock_id: '8070'
   name: 長華電材
   market: TWSE
-  weight: 0.00577
+  weight: 0.00613
